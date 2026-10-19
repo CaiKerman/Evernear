@@ -1,0 +1,28 @@
+{
+  "name": "ambient-companion",
+  "productName": "Ambient Companion",
+  "version": "0.5.1",
+  "description": "Personal portable voice assistant with explicit routing and plaintext memory",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc && node scripts/copy-assets.mjs",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node --test dist/tests/*.test.js",
+    "package:win": "npm run build && node scripts/package.mjs win32",
+    "package:linux": "npm run build && node scripts/package.mjs linux"
+  },
+  "dependencies": {
+    "https-proxy-agent": "7.0.6",
+    "undici": "7.30.1",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@types/node": "24.10.0",
+    "@types/ws": "8.18.1",
+    "electron": "44.9.0",
+    "typescript": "5.9.3"
+  }
+}

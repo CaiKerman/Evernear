@@ -1,0 +1,88 @@
+{
+  "version": "0.5.1",
+  "verifiedAt": "2026-10-18T16:06:12.157473+00:00",
+  "automated": {
+    "unitAndProtocol": {
+      "passed": 106,
+      "failed": 0,
+      "newHandoffRegressions": 8,
+      "voicePairCombinations": 16
+    },
+    "finalAsarDesktop": {
+      "core": {
+        "ok": true,
+        "checks": [
+          "foreground-PCM-receipt",
+          "minimized-PCM-receipt",
+          "hidden-PCM-receipt",
+          "WebAudio-waveform",
+          "50002-no-retry-and-recovery",
+          "foreground-generation-before-background-result",
+          "one-background-call-chat-and-readout",
+          "paused-cloud-replay-no-text-call"
+        ],
+        "rendererErrors": 0,
+        "textCalls": 1,
+        "pcmPeak": 5
+      },
+      "voiceMatrix": {
+        "ok": true,
+        "checks": [
+          {
+            "low": "qwen",
+            "high": "openai",
+            "highRawMicrophonePackets": 0,
+            "lowAudio": 38,
+            "highAudio": 0
+          },
+          {
+            "low": "openai",
+            "high": "gemini",
+            "highRawMicrophonePackets": 0,
+            "lowAudio": 61,
+            "highAudio": 0
+          },
+          {
+            "low": "gemini",
+            "high": "doubao",
+            "highRawMicrophonePackets": 0,
+            "lowAudio": 30,
+            "highAudio": 0
+          },
+          {
+            "low": "doubao",
+            "high": "qwen",
+            "highRawMicrophonePackets": 0,
+            "lowAudio": 42,
+            "highAudio": 38
+          }
+        ],
+        "rendererErrors": 0,
+        "tests": [
+          "two-independent-provider-selectors",
+          "both-connection-checks-no-mic",
+          "four-vendors-both-modes",
+          "native-PCM-playback-receipts",
+          "persistent-low-gate-approved-high-input",
+          "return-low",
+          "credential-clear-on-vendor-change",
+          "inheritance-reset",
+          "conditional-doubao-fields",
+          "no-horizontal-overflow-760"
+        ]
+      }
+    }
+  },
+  "package": {
+    "asarSha256": "2d388f66b681ec960076dbd93ef89ba50a787e1e5a89fd4d4405c4d436aa6d28",
+    "noPersonalData": true,
+    "noTestsInRuntime": true,
+    "newRuntimeDependencies": 0
+  },
+  "limitations": [
+    "Local protocol fixtures and fake microphone only; no actual vendor API credentials were used.",
+    "Desktop automation ran on Linux Electron, not Windows hardware.",
+    "No 24-hour soak test or real environmental speech/intervention accuracy evaluation.",
+    "Local tests do not prove real cloud HTTP429 or Qwen50002 are eliminated."
+  ]
+}

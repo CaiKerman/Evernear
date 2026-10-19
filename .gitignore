@@ -1,0 +1,32 @@
+node_modules/
+dist/
+release/
+personal/
+*.log
+
+# Local credentials and copied personal data
+.env
+.env.*
+!.env.example
+.npmrc
+config.json
+session.json
+memory.md
+instructions.md
+request-state.json*
+history/
+recordings/
+logs/
+requests/
+personal*.zip
+
+# Generated packages and local editor files
+*.asar
+*.zip
+*.exe
+*.working
+*.tmp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
