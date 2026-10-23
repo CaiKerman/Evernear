@@ -84,5 +84,97 @@
     "Desktop automation ran on Linux Electron, not Windows hardware.",
     "No 24-hour soak test or real environmental speech/intervention accuracy evaluation.",
     "Local tests do not prove real cloud HTTP429 or Qwen50002 are eliminated."
-  ]
+  ],
+  "quickInputDevelopment": {
+    "date": "2026-10-23",
+    "status": "M1 文字闭环与 M2 局部上下文已实现并通过本地验证",
+    "unitAndProtocol": {
+      "passed": 120,
+      "failed": 0,
+      "newQuickTests": 14
+    },
+    "quickDesktop": {
+      "ok": true,
+      "checks": [
+        "separate-IPC-normal-window-level",
+        "IME-confirm-does-not-send-and-stream-copy",
+        "local-context-toggle-isolation",
+        "cancel-aborts-HTTP",
+        "settings-entry-JSON-errors-and-shared-config",
+        "hide-show-persists-without-starting-listening"
+      ],
+      "rendererErrors": 0,
+      "textCalls": 5,
+      "platform": "linux",
+      "windowsTaskbarAndDefender": "not verified"
+    },
+    "voiceDesktopRegression": {
+      "ok": true,
+      "checks": [
+        "foreground-PCM-receipt",
+        "minimized-PCM-receipt",
+        "hidden-PCM-receipt",
+        "WebAudio-waveform",
+        "50002-no-retry-and-recovery",
+        "foreground-generation-before-background-result",
+        "one-background-call-chat-and-readout",
+        "paused-cloud-replay-no-text-call"
+      ],
+      "rendererErrors": 0,
+      "textCalls": 1,
+      "pcmPeak": 5
+    },
+    "voiceMatrixRegression": {
+      "ok": true,
+      "checks": [
+        {
+          "low": "qwen",
+          "high": "openai",
+          "highRawMicrophonePackets": 0,
+          "lowAudio": 21,
+          "highAudio": 0
+        },
+        {
+          "low": "openai",
+          "high": "gemini",
+          "highRawMicrophonePackets": 0,
+          "lowAudio": 19,
+          "highAudio": 0
+        },
+        {
+          "low": "gemini",
+          "high": "doubao",
+          "highRawMicrophonePackets": 0,
+          "lowAudio": 19,
+          "highAudio": 0
+        },
+        {
+          "low": "doubao",
+          "high": "qwen",
+          "highRawMicrophonePackets": 0,
+          "lowAudio": 19,
+          "highAudio": 21
+        }
+      ],
+      "rendererErrors": 0,
+      "tests": [
+        "two-independent-provider-selectors",
+        "both-connection-checks-no-mic",
+        "four-vendors-both-modes",
+        "native-PCM-playback-receipts",
+        "persistent-low-gate-approved-high-input",
+        "return-low",
+        "credential-clear-on-vendor-change",
+        "inheritance-reset",
+        "conditional-doubao-fields",
+        "no-horizontal-overflow-760"
+      ]
+    },
+    "newRuntimeDependencies": 0,
+    "newWindowsPackage": false,
+    "windowsTaskbarVerified": false,
+    "windowsDefenderScan": "not performed",
+    "realCloudVerified": false,
+    "historicalPackageNote": "Root package/asar QA fields are the unchanged 0.5.1 historical record, not this development build."
+  }
 }

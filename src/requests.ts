@@ -56,10 +56,10 @@ export class RequestController extends EventEmitter {
   private check(g:Group,limit:number){const now=Date.now();if(g.cooldown>now)throw new LocalRequestLimit(`该接口正在冷却，请约 ${Math.ceil((g.cooldown-now)/1000)} 秒后再试`);if(g.starts.length>=limit)throw new LocalRequestLimit(`该接口最近 ${this.windowMs/1000} 秒已发出 ${g.starts.length} 次请求，上限 ${limit} 次，请约 ${Math.max(1,Math.ceil((g.starts[0]+this.windowMs-now)/1000))} 秒后再试`);}
   private async lock(g:Group,signal:AbortSignal){signal.throwIfAborted();if(!g.busy){g.busy=true;return;}await new Promise<void>((resolve,reject)=>{const row={resolve:()=>{signal.removeEventListener('abort',row.abort);resolve();},reject,signal,abort:()=>{g.waiters=g.waiters.filter(x=>x!==row);reject(signal.reason||new Error('已取消'));}};g.waiters.push(row);signal.addEventListener('abort',row.abort,{once:true});});}
   private unlock(g:Group){const next=g.waiters.shift();if(next)next.resolve();else g.busy=false;}
-  async run<T>(info:RequestInfo,signal:AbortSignal,send:()=>Promise<T>):Promise<T>{
+  async run<T>(info:RequestInfo,signal:AbortSignal,send:()=>Promise<T>,immediate=false):Promise<T>{
     const {origin}=this.endpoint(info),g=this.group(origin,info.channel),limit=info.limit??this.policy().limit;let locked=false,id='',started=0;
     try{
-      this.check(g,limit);await this.lock(g,signal);locked=true;
+      this.check(g,limit);if(immediate&&(g.busy||Date.now()-g.lastStart<this.minIntervalMs))throw new LocalRequestLimit(g.busy?'文字接口忙，请稍后手动提交':'文字请求间隔不足，请稍后手动提交');await this.lock(g,signal);locked=true;
       const delay=this.minIntervalMs-(Date.now()-g.lastStart);if(delay>0)await wait(delay,signal);
       signal.throwIfAborted();this.group(origin,info.channel);this.check(g,limit);
       started=Date.now();id=randomUUID();g.starts.push(started);g.lastStart=started;this.record(info,'start',{id});
