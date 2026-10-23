@@ -1,7 +1,7 @@
 # 伴语快捷输入栏：需求与开发计划
 
 - 日期：2026-10-22（北京时间）
-- 状态：M1 无上下文文字闭环已实现并通过本地验证；M2 待接入；尚无新 Windows 包。实施/验证边界见 [QUICK_INPUT_STATUS.md](QUICK_INPUT_STATUS.md)
+- 状态：M1 文字闭环与 M2 局部上下文已实现并通过本地验证；尚无新 Windows 包。实施/验证边界见 [QUICK_INPUT_STATUS.md](QUICK_INPUT_STATUS.md)
 - 分支：`feature/taskbar-quick-input`
 - 基线：`main@f1a1ce6d2f23f7e1a1f6890644fea3750371b380`，伴语 0.5.1
 - 接续：先读 [PROJECT.md](PROJECT.md) 与 [AGENTS.md](AGENTS.md)，再读本文件

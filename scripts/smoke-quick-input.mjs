@@ -52,10 +52,17 @@ try {
   assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'The input method confirmation.');
   checks.push('IME-confirm-does-not-send-and-stream-copy');
 
-  await quick.locator('#input').fill('cancel this'); await quick.locator('#send').click(); await until(() => calls.length === 2); delta(1, 'partial');
+  await quick.locator('#context').check();
+  const send = async (text, result) => { const index = calls.length; await quick.locator('#input').fill(text); await quick.locator('#send').click(); await until(() => calls.length > index); delta(index, result); done(index); await quick.waitForFunction(result => document.querySelector('#result').textContent === result && document.querySelector('#result-label').textContent === '结果', result); };
+  await send('one', 'ONE'); await send('two', 'TWO');
+  assert.deepEqual(calls[2].body.messages.slice(1).map(m => m.content), ['one', 'ONE', 'two']);
+  await quick.locator('#context').uncheck(); await send('fresh', 'FRESH'); assert.equal(calls[3].body.messages.length, 2);
+  checks.push('local-context-toggle-isolation');
+
+  await quick.locator('#input').fill('cancel this'); await quick.locator('#send').click(); await until(() => calls.length === 5); delta(4, 'partial');
   await quick.waitForFunction(() => document.querySelector('#result').textContent === 'partial');
   await quick.locator('#cancel').click(); await quick.waitForFunction(() => document.querySelector('#status').textContent.includes('取消'));
-  await until(() => calls[1].res.destroyed); checks.push('cancel-aborts-HTTP');
+  await until(() => calls[4].res.destroyed); checks.push('cancel-aborts-HTTP');
 
   await quick.locator('#preset').selectOption('polish');
   await quick.locator('#settings').click(); await main.waitForFunction(() => document.querySelector('#page-settings').classList.contains('active'));

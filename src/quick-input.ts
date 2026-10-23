@@ -7,13 +7,21 @@ import { quickPresets } from './quick-settings.js';
 import type { RequestController } from './requests.js';
 import type { TextWork } from './text-work.js';
 
+type Message = { role: 'user' | 'assistant'; content: string };
 export class QuickInput extends EventEmitter {
+    private history: Message[] = [];
+    private epoch = 0;
     private active?: { id: string; abort: AbortController };
     private view = { id: '', status: 'idle', result: '', error: '', firstMs: null as number | null, totalMs: null as number | null };
     constructor(private store: Store, private work: TextWork, private requests: RequestController, private usage: (record: any) => void) { super(); work.on('change', () => this.publish()); }
-    snapshot() { return { ...this.view, settings: this.store.config.quickInput, busySource: this.work.source || '', historyTurns: 0 }; }
+    snapshot() { return { ...this.view, settings: this.store.config.quickInput, busySource: this.work.source || '', historyTurns: this.history.length }; }
     private publish() { this.emit('change', this.snapshot()); }
-    settingsChanged(_before: Config) { this.publish(); }
+    clear() { this.epoch++; this.history = []; this.publish(); }
+    settingsChanged(before: Config) {
+        const a = before.quickInput, b = this.store.config.quickInput;
+        if (a.context !== b.context || a.preset !== b.preset || JSON.stringify(a.parameters) !== JSON.stringify(b.parameters) || JSON.stringify(before.advanced) !== JSON.stringify(this.store.config.advanced)) this.clear();
+        else this.publish();
+    }
     cancel() {
         if (!this.active) return;
         if (!this.active.abort.signal.aborted) this.active.abort.abort(new Error('已取消'));
@@ -25,15 +33,17 @@ export class QuickInput extends EventEmitter {
         const config = structuredClone(this.store.config), settings = config.quickInput;
         const prompt = quickPresets[settings.preset].prompt;
         if (prompt.length + input.length > config.contextChars) throw new Error('本次输入超过上下文字符上限，请缩短输入');
+        const turns = settings.context ? this.history.map(m => ({ ...m })) : [];
+        while (turns.length && (turns.length > config.recentTurns || turns.reduce((n, t) => n + t.content.length, prompt.length + input.length) > config.contextChars)) turns.splice(0, 2);
         const job = { id: randomUUID(), abort: new AbortController() };
         const release = this.work.claim('快捷输入', job.abort);
-        const started = performance.now();
+        const epoch = this.epoch, started = performance.now();
         this.active = job;
         this.view = { id: job.id, status: 'running', result: '', error: '', firstMs: null, totalMs: null }; this.publish();
         const timer = setTimeout(() => job.abort.abort(new Error('快捷生成超时')), config.taskTimeoutSeconds * 1000);
         try {
             const model = new TextModel(config, this.usage, { requests: this.requests, source: 'quick-input', taskId: job.id, manual: true });
-            const result = await model.complete([{ role: 'system', content: prompt }, { role: 'user', content: input }], job.abort.signal, {
+            const result = await model.complete([{ role: 'system', content: prompt }, ...turns, { role: 'user', content: input }], job.abort.signal, {
                 parameters: settings.parameters[settings.preset],
                 onDelta: text => {
                     if (this.active !== job || job.abort.signal.aborted) return;
@@ -45,6 +55,11 @@ export class QuickInput extends EventEmitter {
             if (this.active !== job) return;
             this.view.result = result; this.view.status = 'done';
             this.view.firstMs ??= Math.round(performance.now() - started);
+            if (settings.context && epoch === this.epoch) {
+                turns.push({ role: 'user', content: input }, { role: 'assistant', content: result });
+                while (turns.length && (turns.length > config.recentTurns || turns.reduce((n, t) => n + t.content.length, prompt.length) > config.contextChars)) turns.splice(0, 2);
+                this.history = turns;
+            }
         } catch (e) {
             if (this.active === job) {
                 this.view.status = this.view.status === 'cancelled' ? 'cancelled' : 'error';

@@ -36,6 +36,7 @@ export function createQuickWindow(store: Store, quick: QuickInput, settings: () 
     on('quick:snapshot', () => quick.snapshot());
     on('quick:send', text => quick.send(text));
     on('quick:cancel', () => quick.cancel());
+    on('quick:clear', () => quick.clear());
     on('quick:copy', () => clipboard.writeText(quick.snapshot().result));
     on('quick:settings', settings);
     on('quick:hide', () => saveVisible(false));

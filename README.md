@@ -16,7 +16,7 @@ Windows x64 解压后运行 VoiceAssistant.exe。升级前退出旧程序；小�
 
 - [持续语音开发目标、V0—V6 里程碑与验收](VOICE_SCHEDULING_PLAN.md)
 - [快捷输入栏需求与 M0—M4 里程碑](TASKBAR_QUICK_INPUT_PLAN.md)
-- 本轮 PR 的 base 指向 feature/taskbar-quick-input；审核后整合。M1 无上下文文字闭环已实现并通过本地验证；M2 待接入，详见 [快捷栏开发状态与使用](QUICK_INPUT_STATUS.md)。尚未制作新 Windows 包；下列 0.5.1 QA 为历史记录。
+- 本轮 PR 的 base 指向 feature/taskbar-quick-input；审核后整合。M1 文字闭环与 M2 局部上下文已实现并通过本地验证，详见 [快捷栏开发状态与使用](QUICK_INPUT_STATUS.md)。尚未制作新 Windows 包；下列 0.5.1 QA 为历史记录。
 
 ## 0.5.1 改动
 

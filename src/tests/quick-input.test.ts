@@ -76,7 +76,24 @@ test('missing text credentials produce an actionable error and no request', asyn
     await f.quick.send('unconfigured'); assert.match(f.quick.snapshot().error, /缺少API Key/); assert.equal(f.calls.length, 0);
 });
 
+test('context toggles start empty, keep successful pairs only, and never import off-mode messages', async t => {
+    const f = await fixture(t); await f.send('off', 'OFF'); f.settings({ context: true });
+    await f.send('one', 'ONE'); await f.send('two', 'TWO');
+    assert.deepEqual(f.calls[2].body.messages.slice(1).map((m: any) => m.content), ['one', 'ONE', 'two']);
+    f.settings({ context: false }); assert.equal(f.quick.snapshot().historyTurns, 0); assert.equal(f.quick.snapshot().result, 'TWO');
+    await f.send('off again', 'OFF AGAIN'); f.settings({ context: true }); await f.send('new', 'NEW');
+    assert.equal(f.calls.at(-1)!.body.messages.length, 2);
+});
 
+test('preset switch and clear invalidate in-flight context without changing its submitted snapshot', async t => {
+    const f = await fixture(t); f.settings({ context: true });
+    const pending = f.quick.send('first'); await until(() => f.calls.length === 1);
+    f.settings({ preset: 'polish' }); f.delta(0, 'old translation'); f.done(0); await pending;
+    assert.match(f.calls[0].body.messages[0].content, /专业翻译/); assert.equal(f.quick.snapshot().historyTurns, 0);
+    await f.send('second', 'Polished'); assert.match(f.calls[1].body.messages[0].content, /润色/); assert.equal(f.calls[1].body.messages.length, 2);
+    const pending2 = f.quick.send('third'); await until(() => f.calls.length === 3); f.quick.clear(); f.delta(2, 'late'); f.done(2); await pending2;
+    assert.equal(f.quick.snapshot().result, 'late'); assert.equal(f.quick.snapshot().historyTurns, 0);
+});
 
 test('cancelled partial result cannot contaminate the next turn', async t => {
     const f = await fixture(t); f.settings({ context: true });
@@ -120,6 +137,12 @@ test('late cleanup of cancelled text work cannot release newer ownership', () =>
     assert.equal(work.source, 'new'); assert.throws(() => work.claim('third', new AbortController()), /new/); releaseNew(); assert.equal(work.source, undefined);
 });
 
+test('context drops whole oldest pairs to the budget and refuses oversized current input', async t => {
+    const f = await fixture(t); f.store.saveConfig({ ...f.store.config, contextChars: 2000, recentTurns: 2 }); f.settings({ context: true });
+    await f.send('a', 'A'); await f.send('b', 'B'); await f.send('c', 'C');
+    assert.deepEqual(f.calls[2].body.messages.slice(1).map((m: any) => m.content), ['b', 'B', 'c']);
+    await assert.rejects(f.quick.send('x'.repeat(2000)), /上限/); assert.equal(f.calls.length, 3);
+});
 
 test('quick requests report rate protection immediately instead of waiting or scheduling', async () => {
     const requests = new RequestController(() => ({ origin: '', limit: 1 }), { minIntervalMs: 60000 });

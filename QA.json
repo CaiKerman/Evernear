@@ -87,23 +87,24 @@
   ],
   "quickInputDevelopment": {
     "date": "2026-10-23",
-    "status": "M1 无上下文文字闭环已实现并通过本地验证；M2 待接入",
+    "status": "M1 文字闭环与 M2 局部上下文已实现并通过本地验证",
     "unitAndProtocol": {
-      "passed": 117,
+      "passed": 120,
       "failed": 0,
-      "newQuickTests": 11
+      "newQuickTests": 14
     },
     "quickDesktop": {
       "ok": true,
       "checks": [
         "separate-IPC-normal-window-level",
         "IME-confirm-does-not-send-and-stream-copy",
+        "local-context-toggle-isolation",
         "cancel-aborts-HTTP",
         "settings-entry-JSON-errors-and-shared-config",
         "hide-show-persists-without-starting-listening"
       ],
       "rendererErrors": 0,
-      "textCalls": 2,
+      "textCalls": 5,
       "platform": "linux",
       "windowsTaskbarAndDefender": "not verified"
     },
