@@ -10,13 +10,13 @@ Windows x64 解压后运行 VoiceAssistant.exe。升级前退出旧程序；小�
 
 先填写轻量语音的接口、密钥、模型和音色，然后开始倾听。高级语音可留空；文字推理按需要填写并启用。两个语音槽位均保留 Qwen、OpenAI Realtime、Gemini Live、Doubao 原生协议。接口握手检查只验证连接与会话配置，实际生成和播放应通过正常对话确认。
 
-## 本轮开发计划（尚未实现）
+## 本轮开发进展
 
 已确认的新目标：基础语音值守并先响应，同步唤醒高级待命；首答不足时通过摘要交接，高级从实际接管后直接接收原始声音，交流结束再恢复基础。高级文字按需并行，Jev 暂不接入。
 
 - [持续语音开发目标、V0—V6 里程碑与验收](VOICE_SCHEDULING_PLAN.md)
 - [快捷输入栏需求与 M0—M4 里程碑](TASKBAR_QUICK_INPUT_PLAN.md)
-- 本轮 PR 的 base 指向 feature/taskbar-quick-input；审核后整合。当前代码仍为0.5.1，下列说明与旧QA记录不代表新功能完成。
+- 本轮 PR 的 base 指向 feature/taskbar-quick-input；审核后整合。M1 无上下文文字闭环已实现并通过本地验证；M2 待接入，详见 [快捷栏开发状态与使用](QUICK_INPUT_STATUS.md)。尚未制作新 Windows 包；下列 0.5.1 QA 为历史记录。
 
 ## 0.5.1 改动
 

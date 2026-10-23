@@ -61,10 +61,10 @@ function renderTasks(tasks:Task[]){const root=$('tasks');$<HTMLButtonElement>('c
 function renderContext(p:ContextPacket){$('context-purpose').textContent=p.purpose;$('context-size').textContent=`${p.chars.toLocaleString()} / ${p.limit.toLocaleString()}`;$('context-memories').textContent=String(p.memory.length);$('context-json').textContent=JSON.stringify({instructions:p.instructions,...JSON.parse(p.text)},null,2);}
 function nested(obj:any,key:string){return key.split('.').reduce((o,k)=>o?.[k],obj);}
 function assign(obj:any,key:string,value:any){const keys=key.split('.');let o=obj;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)!]=value;}
-function readSettings():Config{const next=structuredClone(config);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const val=n instanceof HTMLInputElement&&n.type==='checkbox'?n.checked:n instanceof HTMLInputElement&&n.type==='number'?(n.value===''&&/^(prices|highPrices|advancedPrices)\./.test(n.name)?null:Number(n.value)):n.value.trim();assign(next,n.name,val);}next.sensitivity=$<HTMLSelectElement>('sensitivity').value as Config['sensitivity'];return next;}
+function readSettings(includeQuickParameters=true):Config{const next=structuredClone(config);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const val=n instanceof HTMLInputElement&&n.type==='checkbox'?n.checked:n instanceof HTMLInputElement&&n.type==='number'?(n.value===''&&/^(prices|highPrices|advancedPrices)\./.test(n.name)?null:Number(n.value)):n.value.trim();assign(next,n.name,val);}next.sensitivity=$<HTMLSelectElement>('sensitivity').value as Config['sensitivity'];try{if(includeQuickParameters)next.quickInput.parameters=JSON.parse($<HTMLTextAreaElement>('quick-parameters').value);}catch{throw new Error('快捷栏预设参数不是有效的 JSON');}return next;}
 const field=(name:string)=>document.querySelector<HTMLInputElement|HTMLSelectElement>(`[name="${name}"]`)!;
 function endpointPreview(){
-  if(!config)return;const draft=readSettings();
+  if(!config)return;const draft=readSettings(false);
   for(const [lane,id] of [['low','voice-preview'],['high','high-voice-preview']] as const){
     try{const resolved=resolveVoiceConfig(draft,lane);$(id).textContent='实际实时地址：'+normalizeVoiceURL(voiceProvider(resolved),resolved.url);}
     catch(e){$(id).textContent=String(e).replace(/^Error: /,'');}
@@ -125,7 +125,7 @@ function renderRequests(r:any){const at=new Date(r.at).toLocaleTimeString();$('r
 function showAdvancedStatus(status:{state:string;message:string}){const el=$('advanced-status');el.textContent=status.message;el.classList.toggle('warning',['disabled','incomplete','failed'].includes(status.state));}
 function advancedPreview(){
   if(!config)return;
-  const draft=readSettings(),saved=advancedAvailability(config),status=advancedAvailability(draft);
+  const draft=readSettings(false),saved=advancedAvailability(config),status=advancedAvailability(draft);
   const dirty=JSON.stringify(draft.advanced)!==JSON.stringify(config.advanced)||draft.proxy!==config.proxy;
   const el=$('advanced-config-status');el.textContent=(dirty?'未保存的编辑：'+status.message.replace('已保存启用','填写完整，保存后启用')+'\n当前生效：'+saved.message:saved.message);
   el.classList.toggle('warning',dirty||status.state!=='configured');
@@ -142,12 +142,14 @@ async function testConnection(lane:'voice'|'high-voice'|'text'){
       config=await call('config:save',candidate);fillSettings();showAdvancedStatus(advancedAvailability(config));
       toast('文字接口测试成功，已启用并保存。可以开始倾听，或继续刚才的问题。');
     }else toast(result.message);
-  }catch{}finally{b.disabled=false;b.textContent=old;}
+  }catch(e){toast(String(e),true);}finally{b.disabled=false;b.textContent=old;}
 }
-function fillSettings(){for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const v=nested(config,n.name);if(n instanceof HTMLInputElement&&n.type==='checkbox')n.checked=Boolean(v);else n.value=String(v??'');}$<HTMLSelectElement>('sensitivity').value=config.sensitivity;inferPreset();providerUI();advancedPreview();}
+function fillSettings(){$<HTMLTextAreaElement>('quick-parameters').value=JSON.stringify(config.quickInput.parameters,null,2);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const v=nested(config,n.name);if(n instanceof HTMLInputElement&&n.type==='checkbox')n.checked=Boolean(v);else n.value=String(v??'');}$<HTMLSelectElement>('sensitivity').value=config.sensitivity;inferPreset();providerUI();advancedPreview();}
 async function devices(ask=false){try{if(ask){const s=await navigator.mediaDevices.getUserMedia({audio:true,video:false});s.getTracks().forEach(t=>t.stop());}const ds=await navigator.mediaDevices.enumerateDevices();for(const [id,kind,key] of [['microphone','audioinput','microphone'],['output-device','audiooutput','outputDevice']] as const){const sel=$<HTMLSelectElement>(id);sel.replaceChildren(new Option('系统默认',''));for(const d of ds.filter(d=>d.kind===kind))sel.add(new Option(d.label||`设备 ${d.deviceId.slice(0,6)}`,d.deviceId));if(config[key]&&!Array.from(sel.options).some(o=>o.value===config[key]))sel.add(new Option('已保存的设备（当前未检测到）',config[key]));sel.value=config[key];}}catch(e){if(ask)toast('无法获取音频设备：'+String(e),true);}}
 
 bridge.subscribe(e=>{
+  if(e.type==='settingsOpen'){void call('snapshot').then((s:Snapshot)=>{config=s.config;fillSettings();page('settings');}).catch(()=>{});}
+  if(e.type==='quickSettings'&&config){config.quickInput=e.settings;const checkbox=document.querySelector<HTMLInputElement>('[name="quickInput.visible"]');if(checkbox)checkbox.checked=e.settings.visible;}
   if(e.type==='requests')renderRequests(e.requests);
   if(e.type==='state'){updateState(e);if(e.advancedStatus)showAdvancedStatus(e.advancedStatus);if(e.billing)renderBilling(e.billing);if(e.requests)renderRequests(e.requests);}
   if(e.type==='error')toast(e.message,true);
@@ -169,6 +171,8 @@ bridge.subscribe(e=>{
 $('start').onclick=$('pause-header').onclick=()=>void start().catch(()=>{});
 $('interrupt').onclick=()=>{stopPlayback();fire('interrupt');};$('switch-high').onclick=()=>fire('high');$('back-ambient').onclick=()=>fire('ambient');$('cancel-tasks').onclick=()=>fire('tasks:cancel');
 $('clear-tasks').onclick=()=>{void call('tasks:clear').then((count:number)=>toast(count?`已清空 ${count} 条已结束任务记录；运行中的任务会保留。`:'没有可清空的已结束任务记录。')).catch(()=>{});};
+$('quick-toggle').onclick=()=>fire('quick:toggle');
+$('cancel-text-work').onclick=()=>fire('text:cancel-active');
 $('open-folder').onclick=()=>fire('folder:open');$('quit').onclick=()=>fire('quit');
 $('refresh-context').onclick=()=>void call('context').then(renderContext).catch(()=>{});
 $('refresh-devices').onclick=()=>void devices(true);
@@ -182,7 +186,7 @@ $('save-memory').onclick=()=>void call('text:save','memory.md',$<HTMLTextAreaEle
 $('save-instructions').onclick=()=>void call('text:save','instructions.md',$<HTMLTextAreaElement>('instructions-editor').value).then(()=>toast('行为指令已保存；重新连接或下次刷新会话时生效')).catch(()=>{});
 $('organize').onclick=()=>fire('memory:organize');
 $('add-memory').onclick=()=>{const input=$<HTMLInputElement>('new-memory');if(input.value.trim())void call('memory:add',input.value).then(m=>{$<HTMLTextAreaElement>('memory-editor').value=m;input.value='';toast('已保存到 memory.md');}).catch(()=>{});};
-$<HTMLFormElement>('settings-form').onsubmit=e=>{e.preventDefault();void call('config:save',readSettings()).then(c=>{config=c;fillSettings();const status=advancedAvailability(config);showAdvancedStatus(status);toast('设置已保存。'+status.message,status.state==='incomplete'||status.state==='disabled'&&status.missing.length===0);}).catch(()=>{});};
+$<HTMLFormElement>('settings-form').onsubmit=e=>{e.preventDefault();let candidate:Config;try{candidate=readSettings();}catch(error){toast(String(error),true);return;}void call('config:save',candidate).then(c=>{config=c;fillSettings();const status=advancedAvailability(config);showAdvancedStatus(status);toast('设置已保存。'+status.message,status.state==='incomplete'||status.state==='disabled'&&status.missing.length===0);}).catch(()=>{});};
 $<HTMLSelectElement>('sensitivity').onchange=()=>{if(running){toast('请先暂停，再保存介入积极程度');$<HTMLSelectElement>('sensitivity').value=config.sensitivity;return;}const next={...config,sensitivity:$<HTMLSelectElement>('sensitivity').value};void call('config:save',next).then(c=>config=c).catch(()=>{});};
 $<HTMLFormElement>('composer').onsubmit=e=>{e.preventDefault();const n=$<HTMLInputElement>('message'),text=n.value.trim();if(!text)return;if(!running){toast('请先开始倾听',true);return;}void call('text:send',text).then(()=>{n.value='';}).catch(()=>{});};
 document.addEventListener('keydown',e=>{if(e.ctrlKey&&e.shiftKey&&e.code==='Space'){e.preventDefault();void pause();}});
