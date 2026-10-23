@@ -9,6 +9,7 @@ import { buildContext, gateContext, gateRules, historyTurns, parseIntervention }
 import { TextModel, safeError, type VoiceOptions } from './providers.js';
 import { createVoice, type VoiceSession } from './voice/index.js';
 import { resolveVoiceConfig } from './voice-config.js';
+import { TextWork } from './text-work.js';
 import type { AppEvent, ContextPacket, Decision, Mode, Task, VoiceDone } from './types.js';
 export class Assistant extends EventEmitter {
     running = false;
@@ -83,6 +84,8 @@ export class Assistant extends EventEmitter {
     private gateCueKey = '';
     private gateResponse = '';
     readonly requests: RequestController;
+    readonly textWork = new TextWork();
+    recordTextUsage = (record: any) => this.usage(record);
     constructor(public store: Store, private makeVoice: (o: VoiceOptions) => VoiceSession = o => createVoice(o), requests?: RequestController) { super(); this.requests = requests || new RequestController(() => ({ origin: this.store.config.advanced.url, limit: this.store.config.advanced.requestsPerMinute ?? 8 }), {}, this.store.file('request-state.json')); this.requests.on('record', record => { this.store.append('requests', record); this.event('requests', { requests: this.requests.snapshot() }); }); }
     private event(type: string, data: Record<string, unknown> = {}) { this.emit('event', { type, ...data } satisfies AppEvent); }
     private error(e: unknown) { const c = this.store.config; this.event('error', { message: safeError(e, [c.low.key, c.high.key, c.advanced.key, c.low.appKey || '', c.high.appKey || '']) }); }
@@ -361,9 +364,11 @@ export class Assistant extends EventEmitter {
             this.enqueue('已有一个问题在处理，可以继续聊天、补充条件或取消。', '任务提示');
             return false;
         }
+        if (this.textWork.source) { this.event('notice', { message: `文字任务忙：${this.textWork.source}，本次没有排队或取消已有任务。` }); return false; }
         const task: Task = { id: randomUUID(), query, status: 'running', startedAt: new Date().toISOString() };
         const packet = this.packet(query, '高级任务 ' + task.id);
         const abort = new AbortController();
+        const release = this.textWork.claim('语音委托', abort);
         this.taskController = { id: task.id, abort };
         this.store.saveTask(task);
         this.state();
@@ -375,7 +380,7 @@ export class Assistant extends EventEmitter {
             .catch(e => { this.endWaiting(task.id); if (task.status === 'cancelled')
             return; task.status = abort.signal.aborted && String(abort.signal.reason).includes('取消') ? 'cancelled' : 'failed'; task.error = safeError(e, [this.store.config.advanced.key, this.store.config.low.key, this.store.config.high.key]); this.advancedResult = { state: 'failed', message: '高级文字：最近一次任务失败，' + task.error.slice(0, 220) }; task.finishedAt = new Date().toISOString(); this.store.saveTask(task); this.error(task.error); if (this.running && task.status === 'failed')
             this.enqueue('这个问题暂时没能处理成功，错误详情已保留在任务里。', '任务失败'); })
-            .finally(() => { clearTimeout(timer); if (this.taskController?.id === task.id) this.taskController = undefined; this.state(); if (this.running && this.gate?.ready && !this.gate.active) {
+            .finally(() => { release(); clearTimeout(timer); if (this.taskController?.id === task.id) this.taskController = undefined; this.state(); if (this.running && this.gate?.ready && !this.gate.active) {
             try {
                 this.gate.configure(this.gateInstructions());
             }
@@ -728,6 +733,9 @@ export class Assistant extends EventEmitter {
         const abort = this.helperController = new AbortController();
         const source = this.store.session.turns.slice(0, -this.store.config.recentTurns).slice(-40);
         if (!source.length) { this.helperBusy = false; this.helperController = undefined; this.event('notice', { message: '近期对话仍保留原文，暂时不需要压缩摘要。' }); return; }
+        let release: () => void;
+        try { release = this.textWork.claim('手动摘要', abort); }
+        catch (e) { this.helperBusy = false; this.helperController = undefined; throw e; }
         const through = source.at(-1)?.id;
         this.event('notice', { message: '正在压缩较早对话，长期记忆由你维护' });
         const timer = setTimeout(() => abort.abort(), this.store.config.taskTimeoutSeconds * 1000);
@@ -746,6 +754,7 @@ export class Assistant extends EventEmitter {
             this.error(e);
         }
         finally {
+            release();
             clearTimeout(timer);
             this.helperBusy = false;
             this.helperController = undefined;

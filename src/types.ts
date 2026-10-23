@@ -29,6 +29,7 @@ export interface Config {
     low: VoiceConfig;
     high: VoiceConfig;
     advanced: TextConfig;
+    quickInput: QuickInputConfig;
     proxy: string;
     microphone: string;
     outputDevice: string;
@@ -50,6 +51,14 @@ export interface Config {
         input: number | null;
         output: number | null;
     };
+}
+export type QuickPreset = 'translate' | 'polish' | 'answer';
+export interface QuickInputConfig {
+    visible: boolean;
+    preset: QuickPreset;
+    context: boolean;
+    parameters: Record<QuickPreset, Record<string, unknown>>;
+    position?: { x: number; y: number };
 }
 export interface Turn {
     id: string;
