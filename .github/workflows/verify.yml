@@ -1,0 +1,38 @@
+name: Verify and package
+on:
+  pull_request:
+    branches: [main, feature/taskbar-quick-input]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - if: runner.os == 'Linux'
+        run: |
+          npm install --no-save --package-lock=false playwright
+          node scripts/smoke-quick-input.mjs
+          node scripts/smoke-electron.mjs
+          node scripts/smoke-voice-matrix.mjs
+      - if: runner.os == 'Windows'
+        run: npm run package:win
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-windows-package.ps1
+      - if: runner.os == 'Windows' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Evernear-Windows-x64-${{ github.sha }}
+          path: release/
+          if-no-files-found: error

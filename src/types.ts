@@ -88,6 +88,9 @@ export interface Task {
     finishedAt?: string;
     result?: string;
     error?: string;
+    delivery?: 'auto' | 'manual' | 'notify';
+    revision?: number;
+    delivered?: boolean;
 }
 export interface Session {
     version: 1;
@@ -97,12 +100,17 @@ export interface Session {
     tasks: Task[];
 }
 export interface Decision {
-    action: 'ignore' | 'answer' | 'delegate' | 'ambient' | 'switch_high' | 'cancel' | 'remember' | 'recall' | 'capabilities';
+    action: 'ignore' | 'answer' | 'delegate' | 'ambient' | 'switch_high' | 'cancel' | 'remember' | 'recall' | 'capabilities' | 'stop_speaking' | 'ack' | 'yield';
     utterance: string;
     reason: string;
     query?: string;
     memory?: string;
     replaceTaskId?: string;
+    continueHigh?: boolean;
+    summary?: string;
+    tone?: string;
+    firstAnswer?: string;
+    notifyLater?: boolean;
 }
 export interface ContextPacket {
     purpose: string;

@@ -1,4 +1,5 @@
 // Local HTTP fixture and Electron only. No cloud calls or personal credentials.
+import { voiceFixture } from '../dist/tests/voice-fixture.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,6 +8,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 const { _electron } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const calls = [], errors = [], checks = [];
+const voice=await voiceFixture('qwen',true);
 const server = http.createServer((req, res) => {
   let raw = ''; req.on('data', b => raw += b);
   req.on('end', () => { calls.push({ body: JSON.parse(raw), res }); });
@@ -20,7 +22,7 @@ const done = i => calls[i].res.end('data: {"choices":[{"finish_reason":"stop"}]}
 try {
   app = await _electron.launch({ executablePath: path.resolve('node_modules/electron/dist/electron'),
     env: { ...process.env, AMBIENT_TEST_MODE: '1', AMBIENT_TEST_REQUEST_TIMING: 'fast', AMBIENT_TEST_PERSONAL: dir },
-    args: ['--no-sandbox', '--ozone-platform=headless', '--ozone-override-screen-size=1280,800', '--disable-gpu', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio', '.'], timeout: 20000 });
+    args: ['--no-sandbox', '--ozone-platform=headless', '--ozone-override-screen-size=1280,800', '--disable-gpu', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--mute-audio', process.env.AMBIENT_TEST_ENTRY || '.'], timeout: 20000 });
   app.on('window', page => page.on('pageerror', e => errors.push(e.message)));
   await until(() => app.windows().some(p => p.url().endsWith('/index.html')) && app.windows().some(p => p.url().endsWith('/quick.html')));
   const main = app.windows().find(p => p.url().endsWith('/index.html')), quick = app.windows().find(p => p.url().endsWith('/quick.html'));
@@ -82,6 +84,32 @@ try {
   await until(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => w.getTitle().includes('快捷输入')).isVisible()));
   assert.equal((await main.evaluate(() => window.ambient.invoke('snapshot'))).config.quickInput.visible, true);
   checks.push('hide-show-persists-without-starting-listening');
+  await main.evaluate(async url => {
+    const s=await window.ambient.invoke('snapshot');s.config.low={...s.config.low,provider:'qwen',url,key:'fixture'};
+    await window.ambient.invoke('config:save',s.config);
+  },voice.url);
+  const textCalls=calls.length;
+  await quick.locator('#record').click();await quick.waitForFunction(()=>document.querySelector('#record').textContent==='结束录入');
+  await until(()=>voice.audioPackets>0);
+  await quick.locator('#record').click();await quick.waitForFunction(()=>document.querySelector('#input').value==='主动录入测试文本');
+  assert.equal(calls.length,textCalls,'dictation must not submit text');
+  const transcription=voice.connections.find(c=>c.role==='transcribe');
+  assert.equal(transcription.messages.filter(m=>m.type==='response.create').length,0);
+  await quick.locator('#input').fill('可编辑的转写文本');
+  await quick.locator('#record').click();await quick.waitForFunction(()=>document.querySelector('#record').textContent==='结束录入');
+  await main.evaluate(()=>window.ambient.invoke('stop'));
+  await quick.waitForFunction(()=>document.querySelector('#record-cancel').hidden);
+  assert.equal(await main.evaluate(()=>document.querySelector('#start').getAttribute('aria-pressed')),'false');
+  checks.push('one-microphone-isolated-transcription-edit-and-global-pause');
+
+  // Explicit playback works while the main listener is paused and does not add
+  // translated source material to the primary conversation.
+  await quick.locator('#speak').click();
+  await quick.waitForFunction(()=>document.querySelector('#audio-status').textContent==='已播放');
+  const generated=voice.connections.length;
+  await quick.locator('#speak').click();await quick.waitForFunction(()=>document.querySelector('#audio-status').textContent==='已播放');
+  assert.equal(voice.connections.length,generated,'same result reuses generated PCM');
+  checks.push('manual-audio-receipt-cache-and-no-main-history');
   if (process.env.AMBIENT_TEST_SCREENSHOT) await quick.screenshot({ path: process.env.AMBIENT_TEST_SCREENSHOT });
   assert.equal((await main.evaluate(() => window.ambient.invoke('snapshot'))).session.turns.length, 0);
   assert.deepEqual(errors, []);
@@ -94,5 +122,5 @@ try {
   }
   throw error;
 } finally {
-  await app?.close(); server.closeAllConnections(); server.close(); fs.rmSync(dir, { recursive: true, force: true });
+  await app?.close(); voice.close(); server.closeAllConnections(); server.close(); fs.rmSync(dir, { recursive: true, force: true });
 }

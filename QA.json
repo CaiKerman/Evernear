@@ -176,5 +176,54 @@
     "windowsDefenderScan": "not performed",
     "realCloudVerified": false,
     "historicalPackageNote": "Root package/asar QA fields are the unchanged 0.5.1 historical record, not this development build."
+  },
+  "integrationDevelopment": {
+    "version": "0.6.0-dev",
+    "verifiedDate": "2026-10-27",
+    "environment": "Linux Electron 44.9.0; local HTTP/WebSocket fixtures and synthetic microphone; no cloud credentials",
+    "unitAndProtocol": {
+      "passed": 135,
+      "failed": 0,
+      "voicePairs": 16,
+      "newContinuousRegressions": 14,
+      "newContextBudgetRegression": 1
+    },
+    "commands": [
+      "npm test",
+      "node scripts/smoke-quick-input.mjs",
+      "node scripts/smoke-electron.mjs",
+      "node scripts/smoke-voice-matrix.mjs",
+      "npm run package:win"
+    ],
+    "desktop": {
+      "quickInputChecks": 8,
+      "coreVoiceChecks": 8,
+      "voiceMatrixPairs": [
+        "qwen/openai",
+        "openai/gemini",
+        "gemini/doubao",
+        "doubao/qwen"
+      ],
+      "rendererErrors": 0,
+      "nativeHighMicrophone": true,
+      "lowUploadDuringHigh": "zero additional packets"
+    },
+    "windows": {
+      "crossBuild": "passed on Linux",
+      "interactiveRun": "unverified",
+      "defender": "unverified",
+      "realAudio": "unverified",
+      "taskbarIMEAndFullscreen": "unverified"
+    },
+    "cloud": "unverified",
+    "costAndLongRun": "unverified",
+    "milestones": "V0-V4/M1-M3 implementation and local evidence; V5/V6/M0/M4 real acceptance remains incomplete",
+    "evidence": "docs/acceptance.md",
+    "protocolContract": "docs/voice-capabilities.md",
+    "packagedJavaScriptDesktop": {
+      "passed": true,
+      "runtime": "Linux Electron loading cross-built Windows resources/app.asar",
+      "nativeWindowsExecution": false
+    }
   }
 }

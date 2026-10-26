@@ -50,8 +50,9 @@ export async function voiceFixture(provider:VoiceProvider,autoRespond=false,auto
         if(e.realtimeInput?.audio)audioPackets++;
         if(e.clientContent?.turnComplete){text=e.clientContent.turns?.flatMap((t:any)=>t.parts||[]).map((p:any)=>p.text||'').join('')||'';if(autoRespond)c.respond();}
       }else{
-        if(e.type==='session.update'){const s=configuredSession={...configuredSession,...e.session};c.role=String(s.instructions).includes('[stage:reply:low]')?'reply':(s.output_modalities||s.modalities)?.length===1&&(s.output_modalities||s.modalities)[0]==='text'?'gate':/stage:speaker|语音播报器/.test(s.instructions)?'speaker':'high';if(autoReady)c.send({type:'session.updated'});}
+        if(e.type==='session.update'){const s=configuredSession={...configuredSession,...e.session};c.role=s.input_audio_transcription&&s.turn_detection===null?'transcribe':String(s.instructions).includes('[stage:reply:low]')?'reply':(s.output_modalities||s.modalities)?.length===1&&(s.output_modalities||s.modalities)[0]==='text'?'gate':/stage:speaker|语音播报器/.test(s.instructions)?'speaker':'high';if(autoReady)c.send({type:'session.updated'});}
         if(e.type==='input_audio_buffer.append')audioPackets++;
+        if(e.type==='input_audio_buffer.commit'&&c.role==='transcribe')c.send({type:'conversation.item.input_audio_transcription.completed',transcript:'主动录入测试文本'});
         if(e.type==='conversation.item.create'&&e.item.content){text=e.item.content.map((p:any)=>p.text||'').join('');c.send({type:'conversation.item.created',item:e.item});}
         if(e.type==='response.create'&&autoRespond)c.respond();
       }

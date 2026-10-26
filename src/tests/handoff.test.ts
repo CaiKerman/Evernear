@@ -22,7 +22,7 @@ async function rig(t: any, textEnabled = true) {
     });
     server.listen(0, '127.0.0.1'); await once(server, 'listening');
     store.config.low = { ...store.config.low, key: 'fixture', url: voice.url };
-    store.config.high = { ...store.config.low, model: 'high-fixture' };
+    store.config.high = { ...store.config.low, model: '' };
     store.config.advanced = { enabled: textEnabled, key: 'fixture', model: 'text-fixture', url: `http://127.0.0.1:${(server.address() as any).port}`, stream: false };
     const assistant = new Assistant(store, undefined, new RequestController(() => ({ origin: store.config.advanced.url, limit: 8 }), { minIntervalMs: 0 }));
     let receipt = true;
@@ -70,28 +70,33 @@ for (const action of ['ignore', 'cancel']) test(`speech ending cannot release a 
     assert.equal(r.calls.length, 1);
 });
 
-test('high preference still uses low companion speech while one text model owns reasoning', async t => {
-    const r = await rig(t); await r.assistant.switchHigh(); await r.launch();
-    r.decide('switch_high', '那就用高级语音陪我聊会儿');
-    await until(() => r.voice.connections.some(c => c.role === 'reply'));
-    const c = r.voice.connections.find(c => c.role === 'reply')!;
-    await until(() => c.messages.some(m => m.type === 'response.create'));
-    assert.match(c.messages.find(m => m.type === 'session.update').session.instructions, /不重算该问题/);
-    c.respond('我在，我们可以先聊聊。');
-    await until(() => !r.assistant.outputActive);
-    assert.equal(r.voice.connections.filter(c => c.role === 'high').length, 0);
-    assert.equal(r.calls.length, 1);
-    r.calls[0].finish('分析完成'); await until(() => r.store.session.turns.some(t => t.text === '分析完成' && t.delivery === 'heard'));
+test('a high conversation keeps native input and high speech while one text model owns reasoning', async t => {
+    const r = await rig(t);
+    r.store.config.high = { ...r.store.config.low, model: 'high-fixture' };
+    await r.assistant.switchHigh(); await until(()=>r.assistant.receiver==='high');
+    const highGate=r.voice.connections.filter(c=>c.role==='gate').at(-1)!;
+    highGate.respond(JSON.stringify({action:'delegate',utterance:'分析长期费用'}));
+    await until(()=>r.calls.length===1); await until(()=>!r.assistant.outputActive);
+    highGate.respond(JSON.stringify({action:'answer',utterance:'那就陪我聊会儿'}));
+    await until(()=>r.voice.connections.some(c=>c.role==='high'&&c.messages.some(m=>m.type==='response.create')));
+    const c=r.voice.connections.find(c=>c.role==='high')!;
+    assert.match(c.messages.find(m=>m.type==='session.update').session.instructions,/不重算该问题/);
+    c.respond('我在，我们先聊聊。'); await until(()=>!r.assistant.outputActive);
+    assert.equal(r.assistant.receiver,'high'); assert.equal(r.calls.length,1);
+    r.calls[0].finish('分析完成'); await until(()=>r.store.session.turns.some(t=>t.text==='分析完成'&&t.delivery==='heard'));
+    const speaker=r.speakers().at(-1)!; assert.match(speaker.url,/model=high-fixture/);
 });
 
-test('a configured high voice handles a complex question when text is disabled, without parallel calls or a filler request', async t => {
-    const r = await rig(t, false);
-    r.decide('delegate', '分析这个复杂问题');
-    await until(() => r.voice.connections.some(c => c.role === 'high' && c.messages.some(m => m.type === 'response.create')));
-    assert.equal(r.calls.length, 0); assert.equal(r.speakers().length, 0);
-    const high = r.voice.connections.find(c => c.role === 'high')!; high.respond('高级语音给出分析');
-    await until(() => r.store.session.turns.some(t => t.lane === '高级语音' && t.delivery === 'heard'));
-    assert.equal(r.assistant.mode, 'ambient');
+test('text disabled: low first response precedes native high takeover without a text call', async t => {
+    const r=await rig(t,false);r.store.config.high={...r.store.config.low,model:'high-fixture'};
+    r.decide('delegate','分析这个复杂问题');
+    await until(()=>r.voice.connections.some(c=>c.role==='reply'&&c.messages.some(m=>m.type==='response.create')));
+    assert.equal(r.assistant.receiver,'low');r.voice.connections.find(c=>c.role==='reply')!.respond('我来看看这个问题。');
+    await until(()=>r.assistant.receiver==='high');
+    await until(()=>r.voice.connections.some(c=>c.role==='high'&&c.messages.some(m=>m.type==='response.create')));
+    assert.equal(r.calls.length,0);r.voice.connections.find(c=>c.role==='high')!.respond('高级语音给出分析');
+    await until(()=>r.store.session.turns.some(t=>t.lane==='高级语音'&&t.delivery==='heard'));
+    assert.equal(r.assistant.mode,'high');
 });
 
 test('revising a running task aborts the old request; late results cannot speak or erase the replacement', async t => {

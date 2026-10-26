@@ -10,11 +10,15 @@ import type { TextWork } from './text-work.js';
 type Message = { role: 'user' | 'assistant'; content: string };
 export class QuickInput extends EventEmitter {
     private history: Message[] = [];
+    private audio = { status: 'idle', message: '' };
+    private draft = { id: '', text: '' };
+    setAudio(status: string, message: string) { this.audio = { status, message }; this.publish(); }
+    setDraft(id: string, text: string) { this.draft = { id, text }; this.publish(); }
     private epoch = 0;
     private active?: { id: string; abort: AbortController };
     private view = { id: '', status: 'idle', result: '', error: '', firstMs: null as number | null, totalMs: null as number | null };
     constructor(private store: Store, private work: TextWork, private requests: RequestController, private usage: (record: any) => void) { super(); work.on('change', () => this.publish()); }
-    snapshot() { return { ...this.view, settings: this.store.config.quickInput, busySource: this.work.source || '', historyTurns: this.history.length }; }
+    snapshot() { return { ...this.view, audio: this.audio, draft: this.draft, settings: this.store.config.quickInput, busySource: this.work.source || '', historyTurns: this.history.length }; }
     private publish() { this.emit('change', this.snapshot()); }
     clear() { this.epoch++; this.history = []; this.publish(); }
     settingsChanged(before: Config) {

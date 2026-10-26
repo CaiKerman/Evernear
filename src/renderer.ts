@@ -8,7 +8,8 @@ const $=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(
 const bridge=window.ambient;
 let snapshot:Snapshot,config:Config,running=false,starting=false,startGeneration=0,toastTimer:ReturnType<typeof setTimeout>;
 let captureContext:AudioContext|undefined,stream:MediaStream|undefined,captureNode:AudioWorkletNode|undefined;
-let levelLast=0;
+let levelLast=0, manualCapture=false;
+let captureStarting: Promise<void>|undefined;
 const messageElements=new Map<string,HTMLElement>();
 const displayedTurns=new Map<string,Turn>();
 
@@ -22,36 +23,41 @@ const player=new PcmPlayer(()=>config?.outputDevice||'',p=>bridge.playback(p),e=
 const ensurePlayback=()=>player.prepare();
 const stopPlayback=()=>player.interrupt();
 function wakeAudio(){
-  if(!running)return;
   player.wake();
+  if(!running&&!manualCapture)return;
   if(captureContext&&captureContext.state!=='running'&&captureContext.state!=='closed')void captureContext.resume().catch(e=>toast('麦克风恢复失败：'+String(e),true));
 }
 document.addEventListener('visibilitychange',wakeAudio);
 window.addEventListener('focus',wakeAudio);
 
 async function startCapture(){
+  if (captureStarting) return captureStarting;
+  if (stream) return;
+  captureStarting=connectCapture().finally(()=>captureStarting=undefined); return captureStarting;
+}
+async function connectCapture(){
   stream=await navigator.mediaDevices.getUserMedia({video:false,audio:{...(config.microphone?{deviceId:{exact:config.microphone}}:{}),channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
   captureContext=new AudioContext();await captureContext.audioWorklet.addModule(new URL('./ui/capture-worklet.js',import.meta.url));
   const source=captureContext.createMediaStreamSource(stream);captureNode=new AudioWorkletNode(captureContext,'ambient-capture');
   const mute=captureContext.createGain();mute.gain.value=0;source.connect(captureNode).connect(mute).connect(captureContext.destination);
-  captureNode.port.onmessage=e=>{if(e.data.type==='pcm'&&running){const bytes=new Uint8Array(e.data.buffer);let b='';for(const x of bytes)b+=String.fromCharCode(x);bridge.audio(btoa(b));}
+  captureNode.port.onmessage=e=>{if(e.data.type==='pcm'&&(running||manualCapture)){const bytes=new Uint8Array(e.data.buffer);let b='';for(const x of bytes)b+=String.fromCharCode(x);bridge.audio(btoa(b));}
     if(e.data.type==='level'&&performance.now()-levelLast>100){levelLast=performance.now();const scale=Math.min(1.6,.65+e.data.value*12);document.querySelector<HTMLElement>('.wave')!.style.transform=`scaleY(${scale})`;}};
-  captureContext.onstatechange=()=>{if(running&&captureContext?.state==='suspended')wakeAudio();};
+  captureContext.onstatechange=()=>{if((running||manualCapture)&&captureContext?.state==='suspended')wakeAudio();};
   await captureContext.resume();
 }
-async function stopCapture(){stream?.getTracks().forEach(t=>t.stop());stream=undefined;captureNode?.disconnect();captureNode=undefined;const old=captureContext;captureContext=undefined;if(old&&old.state!=='closed')await old.close().catch(()=>{});}
+async function stopCapture(){if(captureStarting)await captureStarting.catch(()=>{});stream?.getTracks().forEach(t=>t.stop());stream=undefined;captureNode?.disconnect();captureNode=undefined;const old=captureContext;captureContext=undefined;if(old&&old.state!=='closed')await old.close().catch(()=>{});}
 function renderListenControls(){
   for(const id of ['start','pause-header']){
     const button=$<HTMLButtonElement>(id);button.disabled=starting;
-    button.textContent=starting?'连接中…':running?(id==='start'?'■ 暂停倾听':'■ 暂停'):(id==='start'?'▶ 开始倾听':'▶ 开始');
-    button.setAttribute('aria-pressed',String(running));button.title=starting?'正在连接语音服务':running?'暂停倾听并停止上传音频':'开始倾听';
+    button.textContent=starting?'连接中…':running?(id==='start'?'■ 暂停全部听说':'■ 暂停全部'):(id==='start'?'▶ 开始倾听':'▶ 开始');
+    button.setAttribute('aria-pressed',String(running));button.title=starting?'正在连接语音服务':running?'停止全部听说并取消语音分析任务':'开始倾听';
   }
 }
 async function start(){if(starting)return;if(running){await pause();return;}starting=true;renderListenControls();const generation=++startGeneration;
-  try{await ensurePlayback();await startCapture();if(generation!==startGeneration){await stopCapture();return;}await call('start');if(generation!==startGeneration){await stopCapture();return;}running=true;updateState({type:'state',running:true,mode:'ambient',label:'正在倾听 · 音频上传中'});toast('已开始收音与上传。Ctrl + Shift + Space 可随时暂停。');}
+  try{await ensurePlayback();await startCapture();if(generation!==startGeneration){await stopCapture();return;}await call('start');if(generation!==startGeneration){await stopCapture();return;}running=true;updateState({type:'state',running:true,mode:'ambient',label:'基础值守 · 麦克风上传至基础语音'});toast('已开始收音与上传。Ctrl + Shift + Space 可随时暂停。');}
   catch(e){await stopCapture();fire('stop');toast(String(e),true);}finally{starting=false;renderListenControls();}}
 async function pause(){startGeneration++;await call('stop');running=false;stopPlayback();await stopCapture();}
-function updateState(e:AppEvent){if(!e.running&&starting)startGeneration++;running=e.running;renderListenControls();document.body.classList.toggle('listening',running);$('status-dot').classList.toggle('online',running);$('status-label').textContent=running?e.label||'正在倾听 · 音频上传中':'已暂停 · 尚未采集或上传音频';$('mode-badge').textContent=e.mode==='high'?'高级语音优先':'轻量语音优先';$('back-ambient').classList.toggle('hidden',e.mode!=='high');$('switch-high').classList.toggle('hidden',e.mode==='high');$('art-label').textContent=running?'LISTENING WITH YOU':'READY TO LISTEN';if(e.tasks)renderTasks(e.tasks);if(!running&&!starting)void stopCapture();}
+function updateState(e:AppEvent){if(!e.running&&starting)startGeneration++;running=e.running;renderListenControls();document.body.classList.toggle('listening',running);$('status-dot').classList.toggle('online',running);$('status-label').textContent=e.manualRecording?e.label:running?e.label||'正在倾听 · 音频上传中':'已暂停 · 尚未采集或上传音频';$('mode-badge').textContent=e.mode==='high'?'高级语音接收':'基础语音接收';$('back-ambient').classList.toggle('hidden',e.mode!=='high');$('switch-high').classList.toggle('hidden',e.mode==='high');$('art-label').textContent=running?'LISTENING WITH YOU':'READY TO LISTEN';if(e.tasks)renderTasks(e.tasks);if(!running&&!starting&&!manualCapture)void stopCapture();}
 function addTurn(t:Turn){displayedTurns.set(t.id,t);$('welcome')?.remove();let el=messageElements.get(t.id);if(!el){el=document.createElement('div');el.className='message '+t.role;el.dataset.id=t.id;const meta=document.createElement('div');meta.className='message-meta';const name=document.createElement('span');name.textContent=t.role==='user'?'你':'伴语';const lane=document.createElement('span');lane.textContent=t.lane;const delivery=document.createElement('span');delivery.className='delivery';meta.append(name,lane,delivery);const body=document.createElement('div');body.className='message-body';el.append(meta,body);if(t.role==='assistant'){const button=document.createElement('button');button.className='link replay-turn';button.onclick=()=>{void ensurePlayback().then(()=>call('speech:replay',t.id)).catch(()=>{});};el.append(button);}$('chat').append(el);messageElements.set(t.id,el);}
   el.querySelector('.message-body')!.textContent=t.text||(t.delivery==='unheard'?'本次语音未生成。':'正在说话…');const d=el.querySelector<HTMLElement>('.delivery')!;d.textContent=t.delivery?({generated:'待播报',heard:'已播报',partial:'部分播报',unheard:'未播报'}[t.delivery]):'';d.title=t.deliveryReason||'';const button=el.querySelector<HTMLButtonElement>('.replay-turn');if(button){button.textContent=t.delivery==='generated'?'等待播报':'重新播报';button.disabled=t.delivery==='generated'||!t.text;button.title=t.deliveryReason||'朗读已生成的文字；会调用语音接口，不会重新请求文字推理';}let reason=el.querySelector<HTMLElement>('.delivery-reason');if(!reason){reason=document.createElement('small');reason.className='delivery-reason';el.append(reason);}reason.textContent=t.deliveryReason&&t.delivery!=='generated'?t.deliveryReason:'';$('chat').scrollTop=$('chat').scrollHeight;
 }
@@ -148,6 +154,7 @@ function fillSettings(){$<HTMLTextAreaElement>('quick-parameters').value=JSON.st
 async function devices(ask=false){try{if(ask){const s=await navigator.mediaDevices.getUserMedia({audio:true,video:false});s.getTracks().forEach(t=>t.stop());}const ds=await navigator.mediaDevices.enumerateDevices();for(const [id,kind,key] of [['microphone','audioinput','microphone'],['output-device','audiooutput','outputDevice']] as const){const sel=$<HTMLSelectElement>(id);sel.replaceChildren(new Option('系统默认',''));for(const d of ds.filter(d=>d.kind===kind))sel.add(new Option(d.label||`设备 ${d.deviceId.slice(0,6)}`,d.deviceId));if(config[key]&&!Array.from(sel.options).some(o=>o.value===config[key]))sel.add(new Option('已保存的设备（当前未检测到）',config[key]));sel.value=config[key];}}catch(e){if(ask)toast('无法获取音频设备：'+String(e),true);}}
 
 bridge.subscribe(e=>{
+  if(e.type==='capture'){manualCapture=!!e.active;if(manualCapture)void startCapture().catch(error=>{manualCapture=false;fire('capture:failed');void stopCapture();toast('主动录音失败：'+String(error),true);});else if(!running)void stopCapture();}
   if(e.type==='settingsOpen'){void call('snapshot').then((s:Snapshot)=>{config=s.config;fillSettings();page('settings');}).catch(()=>{});}
   if(e.type==='quickSettings'&&config){config.quickInput=e.settings;const checkbox=document.querySelector<HTMLInputElement>('[name="quickInput.visible"]');if(checkbox)checkbox.checked=e.settings.visible;}
   if(e.type==='requests')renderRequests(e.requests);

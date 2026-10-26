@@ -15,7 +15,8 @@ export function safeError(error: unknown, secrets: string[] = []) { let s = erro
 export function voiceURL(c: VoiceConfig) { if (!c.key || !c.model || !c.url)
     throw new Error('请先填写实时语音 API Key、模型和地址'); assertRealtimeModel(c.model); const u = new URL(normalizeRealtimeURL(c.url)); u.searchParams.set('model', c.model); return u.toString(); }
 export interface VoiceOptions {
-    role: 'gate' | 'reply' | 'speaker' | 'high';
+    role: 'gate' | 'reply' | 'speaker' | 'high' | 'transcribe';
+    lane?: 'low' | 'high';
     config: VoiceConfig;
     appConfig: Config;
     instructions: string;
@@ -115,7 +116,7 @@ export class Realtime extends EventEmitter {
                     this.texts.set(id, (this.texts.get(id) || '') + (e.delta || ''));
                     this.emit('textDelta', { id, text: e.delta || '' });
                 }
-                if (e.type === 'response.audio.delta' && this.options.role !== 'gate')
+                if (e.type === 'response.audio.delta' && !['gate','transcribe'].includes(this.options.role))
                     this.emit('audio', { id: e.response_id || '', itemId: e.item_id, audio: e.delta });
                 if (e.type === 'response.done') {
                     this.active = false;
@@ -148,9 +149,9 @@ export class Realtime extends EventEmitter {
         this.configured = true;
         this.configuredInstructions = instructions;
         const { role, config, appConfig } = this.options;
-        this.send({ type: 'session.update', session: { modalities: role === 'gate' ? ['text'] : ['text', 'audio'],
+        this.send({ type: 'session.update', session: { modalities: ['gate','transcribe'].includes(role) ? ['text'] : ['text', 'audio'],
                 voice: config.voice, audio: { input: { format: { type: 'pcm', sample_rate: 16000 } }, output: { format: { type: 'pcm', sample_rate: 24000 }, voice: config.voice } },
-                input_audio_transcription: null, instructions,
+                input_audio_transcription: role === 'transcribe' ? { model: 'qwen3-asr-flash-realtime' } : null, instructions,
                 turn_detection: role !== 'gate' ? null : { type: appConfig.vad.type, threshold: appConfig.vad.threshold, silence_duration_ms: appConfig.vad.silenceMs },
                 max_tokens: role === 'gate' ? 1800 : 2500 } });
     }
@@ -165,6 +166,7 @@ export class Realtime extends EventEmitter {
     text(text: string) { if (!this.ready || this.dead)
         throw new Error('语音连接尚未就绪'); if (this.pendingText || this.active)
         throw new Error('上一条语音请求尚未结束'); const id = 'item_' + randomUUID().replaceAll('-', ''); const timer = setTimeout(() => { this.clearText(); this.emit('fault', new Error('服务端未确认文本输入，本轮未发送生成请求')); }, 10000); this.pendingText = { id, text, timer }; this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [{ type: 'input_text', text }] } }); }
+    finishInput() { if (this.options.role !== 'transcribe' || !this.ready || this.dead) throw new Error('转写尚未就绪'); this.send({ type: 'input_audio_buffer.commit' }); }
     toolResult(callId: string, output: string, respond = false) { this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output } }); if (respond)
         this.respond(); }
     respond() { this.send({ type: 'response.create' }); }

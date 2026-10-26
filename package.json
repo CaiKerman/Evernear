@@ -1,7 +1,7 @@
 {
   "name": "ambient-companion",
   "productName": "Ambient Companion",
-  "version": "0.5.1",
+  "version": "0.6.0-dev",
   "description": "Personal portable voice assistant with explicit routing and plaintext memory",
   "private": true,
   "type": "module",
