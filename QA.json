@@ -211,9 +211,10 @@
     "windows": {
       "crossBuild": "passed on Linux",
       "interactiveRun": "unverified",
-      "defender": "unverified",
+      "defender": "passed: Windows CI scan found no threats",
       "realAudio": "unverified",
-      "taskbarIMEAndFullscreen": "unverified"
+      "taskbarIMEAndFullscreen": "unverified",
+      "ciBuild": "passed"
     },
     "cloud": "unverified",
     "costAndLongRun": "unverified",
@@ -224,6 +225,21 @@
       "passed": true,
       "runtime": "Linux Electron loading cross-built Windows resources/app.asar",
       "nativeWindowsExecution": false
+    },
+    "ci": {
+      "sourceCommit": "976a50413669129c9d82b4e5392b80615cc64381",
+      "run": "https://github.com/CaiKerman/Evernear/actions/runs/40373686622",
+      "conclusion": "success",
+      "attempt": 2,
+      "linuxTests": 135,
+      "windowsTests": 135,
+      "linuxDesktop": "all three smoke scripts passed",
+      "windowsJob": 121751784004,
+      "windowsArtifact": "https://github.com/CaiKerman/Evernear/actions/runs/40373686622/artifacts/12672294840",
+      "artifactZipSHA256": "dc15729ad7753b00606ee9bcf91d376c872a773279a3811658c1359b0aff8805",
+      "defenderScanUTC": "2026-10-26T18:01:49Z",
+      "defenderResult": "found no threats",
+      "interactiveWindowsAudioAndCloud": "unverified"
     }
   }
 }
