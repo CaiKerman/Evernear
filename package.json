@@ -8,10 +8,11 @@
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc && node scripts/copy-assets.mjs",
-    "start": "npm run build && electron .",
+    "start": "npm run build && npm run desktop:install && electron .",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "package:win": "npm run build && node scripts/package.mjs win32",
-    "package:linux": "npm run build && node scripts/package.mjs linux"
+    "package:linux": "npm run build && node scripts/package.mjs linux",
+    "desktop:install": "node node_modules/electron/install.js"
   },
   "dependencies": {
     "https-proxy-agent": "7.0.6",

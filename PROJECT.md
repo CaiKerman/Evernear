@@ -51,3 +51,5 @@ Node.js 22+，`npm ci`，`npm test`，`npm start`。Windows 便携包：`npm run
 行为依据为 [持续语音计划](VOICE_SCHEDULING_PLAN.md) 和 [快捷栏计划](TASKBAR_QUICK_INPUT_PLAN.md)；修改遵守 [AGENTS.md](AGENTS.md)。本地验证及 A01—A18 映射见 [acceptance.md](docs/acceptance.md)。Windows、云端、费用和长时间运行仍需实测，不能因 PR 或模拟通过自动完成 V5/V6、M0/M4 的验收。
 
 Jev、手机/ESP32、自动搜索、账号、工具循环、多智能体、独立情绪/摘要服务均不在本轮。仓库未指定开源许可证，不代选许可证。
+
+Electron 44 的 npm 包不再自动下载桌面运行时。`npm start` 会显式安装；单独跑桌面脚本前先执行 `npm run desktop:install`，首次需要联网。纯 `npm test` 不依赖桌面二进制。

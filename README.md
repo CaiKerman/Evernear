@@ -34,3 +34,5 @@ node scripts/smoke-voice-matrix.mjs
 PR 工作流包含 Windows 测试、便携构建、哈希和 Defender 检查；对应产物在 Actions。Defender 不可用会明确写未验证，不冒充通过。
 
 本地测试使用 Linux、模拟接口与假麦克风。Windows 任务栏/输入法/声卡、真实云端语义与费用、长期运行均未验证。四厂商实现差异和额外会话开销见 [协议能力](docs/voice-capabilities.md)。
+
+Electron 44 的 npm 包不再自动下载桌面运行时。`npm start` 会显式安装；单独跑桌面脚本前先执行 `npm run desktop:install`，首次需要联网。纯 `npm test` 不依赖桌面二进制。

@@ -22,6 +22,10 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           npm install --no-save --package-lock=false playwright
+          npm run desktop:install
+      - if: runner.os == 'Linux'
+        name: Desktop smoke checks
+        run: |
           node scripts/smoke-quick-input.mjs
           node scripts/smoke-electron.mjs
           node scripts/smoke-voice-matrix.mjs
