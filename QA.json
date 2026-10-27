@@ -241,5 +241,40 @@
       "defenderResult": "found no threats",
       "interactiveWindowsAudioAndCloud": "unverified"
     }
+  },
+  "pr3ReviewFixes": {
+    "reviewId": 5668073082,
+    "reviewedCommit": "78bdb5af1ccb6d0f43aacc3655ae4c0fb9fafc69",
+    "date": "2026-10-27",
+    "comments": [
+      4389445191,
+      4389445207,
+      4389445224
+    ],
+    "unitAndProtocol": {
+      "passed": 150,
+      "failed": 0,
+      "newReviewRegressions": 15
+    },
+    "baselineReproduction": {
+      "subset": 11,
+      "failedBeforeFix": 8,
+      "passedBeforeFix": 3,
+      "note": "The first 11 review tests were run against the reviewed code before the fix; 4 more configuration/revision/UI regressions were then added."
+    },
+    "desktop": {
+      "quickChecks": 8,
+      "coreVoiceChecks": 8,
+      "voiceMatrixPairs": 4,
+      "rendererErrors": 0,
+      "environment": "Linux Electron, local HTTP/WebSocket fixtures and synthetic microphone"
+    },
+    "fixes": [
+      "Bind handoff to its task ID/revision and live terminal state, including after record clearing; no replacement reasoning for delegated tasks.",
+      "High voice answers follow-up delegation directly if text is disabled or incomplete, with or without firstAnswer.",
+      "Success and failure share delivery authorization and task-keyed revocation; ending/yield defers unapproved failures and retains explicit notify permission."
+    ],
+    "windowsCI": "pending for this revision; integrationDevelopment.ci refers only to the earlier code commit",
+    "realCloudAndInteractiveWindows": "unverified"
   }
 }

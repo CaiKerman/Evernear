@@ -58,3 +58,17 @@
 [Verify and package 运行](https://github.com/CaiKerman/Evernear/actions/runs/40373686622) 对代码提交 `976a504` 全部通过：Linux/Windows 各 135 项测试，Linux 三组桌面脚本，Windows 原生便携构建与 Defender 扫描（未发现威胁）。[下载该次 Windows 产物](https://github.com/CaiKerman/Evernear/actions/runs/40373686622/artifacts/12672294840)，ZIP SHA-256 为 `dc15729ad7753b00606ee9bcf91d376c872a773279a3811658c1359b0aff8805`；exe/asar 哈希及扫描信息见包内 windows-verification.json。
 
 这是 Windows CI 的自动构建/扫描证据，不代表真实声卡、任务栏交互或云端验收。V5/V6、M0/M4 的剩余门槛不变。
+
+## PR #3 审核修正（2026-10-27）
+
+审核版本 78bdb5a，审核编号 5668073082。本轮继续提交到同一个 PR，不合并或关闭审核意见。
+
+| 审核问题 | 修正与回归 |
+|---|---|
+| P1：交接导致终态任务重新推理/重复回答 | transfer 关联当前题目的 Task（含 ID、revision 与终态），清空界面记录也保留该次交接引用；cancelled/failed 不替代推理，done 只交付已有结果。覆盖慢 ready 前取消、失败、先完成以及修订任务身份。 |
+| P1：高级后续 delegate 在文字不可用时被丢弃 | 文字 disabled 或 incomplete 时，高级直接回答获准问题；不以可选 firstAnswer 作为唯一回应。覆盖两种配置及有/无 firstAnswer。 |
+| P2：结束后失败通知插话 | 成功/失败共用交付授权，失败队列携带 task ID；ambient/yield/UI 返回可撤回未授权通知，明确 notify 则保留，取消亦可撤回待播失败。 |
+
+新增 15 项回归，npm test 共 150/150 通过。前三组桌面脚本分别 8/8/4 组通过、页面错误 0；均为本地接口与假麦克风。最初 11 项审核测试在修正前 8 项失败、3 项通过，随后完成修正并补足配置/修订/UI 边界。
+
+上节 976a504 的 Windows 构建/Defender 记录属于旧代码；本次修正的 Windows CI 在提交后重新运行，不用旧扫描结果冒充本次验证。真实云端与交互 Windows 的门槛不变。

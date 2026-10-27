@@ -139,3 +139,85 @@ test('returning low receiver gets low cues without copying private handoff conte
  const r=await rig(t);r.s.remember('PRIVATE-CONTEXT-DO-NOT-PERSIST-IN-LOW-GATE','user',['always']);await r.takeover();await r.a.backAmbient();await until(()=>r.a.receiver==='low');
  const low=r.receiver();assert.match(low.options.instructions,/"preferredVoice":"low"/);assert.doesNotMatch(low.options.instructions,/PRIVATE-CONTEXT/);
 });
+
+// Review regressions use held HTTP responses and explicitly controlled ready /
+// playback events. No provider credentials or wall-clock cloud assumptions.
+async function textServer(t: any, r: Awaited<ReturnType<typeof rig>>) {
+ const calls: { body: any; response: http.ServerResponse }[]=[];
+ const server=http.createServer((request,response)=>{let body='';request.on('data',b=>body+=b);request.on('end',()=>calls.push({body:JSON.parse(body),response}));});
+ server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>{server.closeAllConnections();server.close();});
+ r.s.config.advanced={enabled:true,key:'local',model:'text-fixture',url:`http://127.0.0.1:${(server.address() as any).port}`,stream:false};
+ return calls;
+}
+const settleVoiceEvents=()=>new Promise<void>(resolve=>setImmediate(resolve));
+
+for (const terminal of ['cancelled','failed','done'] as const) test(`review P1: ${terminal} text task cannot restart reasoning at a late high takeover`,async t=>{
+ const r=await rig(t,'high'),calls=await textServer(t,r);
+ r.receiver().decision('delegate','分析两个方案',{firstAnswer:'我来分析，你可以继续补充。'});
+ await until(()=>calls.length===1&&!!r.output());const first=r.output(),task=r.s.session.tasks[0];
+ const high=r.voices.find(v=>v.options.role==='gate'&&v.options.lane==='high')!;
+ if(terminal==='cancelled') {r.a.cancelTasks(task.id);r.a.clearTaskRecords();}
+ else if(terminal==='failed') {calls[0].response.writeHead(500);calls[0].response.end('fixture failure');}
+ else calls[0].response.end(JSON.stringify({choices:[{message:{content:'已有分析结果：方案甲。'}}]}));
+ await until(()=>task.status===terminal);high.open();await settleVoiceEvents();
+ first.answer('我来分析，你可以继续补充。');r.receipt();await until(()=>r.a.receiver==='high');await settleVoiceEvents();
+ assert.equal(r.voices.filter(v=>v.options.role==='high').length,0,'a delegated topic must not fall back to new high reasoning');
+ assert.equal(calls.length,1);
+ assert.match(high.options.instructions,new RegExp(`"status":"${terminal}"`),'handoff must keep the topic task terminal state, even after clearing records');
+ if(terminal==='cancelled')assert.equal(r.output(),undefined);
+ else {
+  await until(()=>!!r.output());const delivery=r.output();assert.equal(delivery.options.role,'speaker');
+  if(terminal==='done')assert.equal(delivery.inputs[0],'已有分析结果：方案甲。');
+  else assert.match(delivery.inputs[0],/暂时没能处理成功/);
+  delivery.answer(delivery.inputs[0]);r.receipt();await settleVoiceEvents();
+  assert.equal(r.output(),undefined);assert.equal(r.voices.filter(v=>v.options.role==='speaker').length,2,'one initial bridge and one terminal delivery');
+ }
+});
+
+for(const textState of ['disabled','incomplete'])for(const firstAnswer of [undefined,'我来比较一下。']) test(`review P1: ${textState} text, high-only follow-up answers with ${firstAnswer?'a':'no'} firstAnswer`,async t=>{
+ const r=await rig(t),high=await r.takeover();r.s.config.advanced.enabled=textState==='incomplete';r.s.config.advanced.url='';
+ const before=r.voices.length,query='帮我分析这两个方案的差别';high.decision('delegate',query,firstAnswer?{firstAnswer}:{});
+ await until(()=>r.voices.slice(before).some(v=>v.options.role==='high'&&v.inputs.length>0));
+ const reply=r.output();assert.equal(reply.options.role,'high');assert.match(reply.inputs[0],new RegExp(query));
+ assert.equal(r.voices.slice(before).filter(v=>v.options.role==='speaker').length,0,'no filler may replace the actual answer');
+ reply.answer('方案甲适合快速验证，方案乙适合扩展。');r.receipt();assert.equal(r.a.receiver,'high');
+});
+
+for(const ending of ['ambient','yield'])for(const notifyLater of [false,true])test(`review P2: HTTP failure after ${ending} respects ${notifyLater?'notify':'manual'} delivery`,async t=>{
+ const r=await rig(t),high=await r.takeover(),calls=await textServer(t,r);
+ high.decision('delegate','分析费用',{firstAnswer:'我来分析。',notifyLater});await until(()=>calls.length===1&&!!r.output());
+ r.output().answer('我来分析。');r.receipt();high.decision(ending,'先到这里');await until(()=>r.a.receiver==='low');
+ const before=r.voices.length;calls[0].response.writeHead(500);calls[0].response.end('fixture failure');await until(()=>r.s.session.tasks[0].status==='failed');await settleVoiceEvents();
+ if(notifyLater){await until(()=>!!r.output());assert.equal(r.output().options.role,'speaker');assert.equal(r.output().options.lane,'low');assert.match(r.output().inputs[0],/暂时没能处理成功/);r.output().answer();r.receipt();}
+ else {assert.equal(r.voices.length,before);assert.equal(r.output(),undefined);assert.equal((r.a as any).queue.length,0);}
+ assert.equal(calls.length,1);
+});
+
+for(const notifyLater of [false,true])test(`review P2: queued failure is ${notifyLater?'retained with notify permission':'withdrawn'} when conversation ends`,async t=>{
+ const r=await rig(t);r.s.config.high.model='';const calls=await textServer(t,r);
+ r.receiver().decision('delegate','分析费用',{firstAnswer:'我来分析。',notifyLater});await until(()=>calls.length===1&&!!r.output());
+ r.output().answer('我来分析。');r.receipt();r.receiver().emit('speech');
+ calls[0].response.writeHead(500);calls[0].response.end('fixture failure');await until(()=>r.s.session.tasks[0].status==='failed');
+ const before=r.voices.length;assert.equal(r.output(),undefined);r.receiver().decision('ambient','结束交流');await settleVoiceEvents();
+ if(notifyLater){await until(()=>!!r.output());assert.match(r.output().inputs[0],/暂时没能处理成功/);r.output().answer();r.receipt();}
+ else {assert.equal(r.voices.length,before);assert.equal((r.a as any).queue.length,0);}
+});
+
+test('review P1: revised text topic transfers its new task ID and revision without recomputing a completed replacement',async t=>{
+ const r=await rig(t,'high'),calls=await textServer(t,r);
+ r.receiver().decision('delegate','分析两个方案',{firstAnswer:'我来分析。'});await until(()=>calls.length===1&&!!r.output());const old=r.s.session.tasks[0];
+ r.receiver().decision('delegate','加上价格条件',{replaceTaskId:old.id,firstAnswer:'按新条件分析。'});
+ await until(()=>calls.length===2&&!!r.output(),3000);const revised=r.s.session.tasks.at(-1)!;assert.notEqual(revised.id,old.id);assert.ok(revised.revision!>old.revision!);
+ calls[1].response.end(JSON.stringify({choices:[{message:{content:'新条件结果。'}}]}));await until(()=>revised.status==='done');
+ const candidate=r.voices.filter(v=>v.options.role==='gate'&&v.options.lane==='high').at(-1)!;candidate.open();await settleVoiceEvents();r.output().answer('按新条件分析。');r.receipt();await until(()=>r.a.receiver==='high');
+ assert.match(candidate.options.instructions,new RegExp(`"id":"${revised.id}"`));assert.match(candidate.options.instructions,new RegExp(`"revision":${revised.revision}`));
+ assert.equal(r.voices.filter(v=>v.options.role==='high').length,0);await until(()=>!!r.output());assert.equal(r.output().inputs[0],'新条件结果。');r.output().answer('新条件结果。');r.receipt();assert.equal(calls.length,2);
+});
+
+test('review P2: UI return withdraws a queued failure and explicit cancellation can revoke a failed task notice',async t=>{
+ const r=await rig(t);r.s.config.high.model='';const calls=await textServer(t,r);
+ r.receiver().decision('delegate','分析费用',{firstAnswer:'我来分析。'});await until(()=>calls.length===1&&!!r.output());r.output().answer();r.receipt();r.receiver().emit('speech');
+ calls[0].response.writeHead(500);calls[0].response.end('fixture failure');await until(()=>r.s.session.tasks[0].status==='failed');await r.a.backAmbient();
+ assert.equal((r.a as any).queue.length,0);r.receiver().decision('ignore');await settleVoiceEvents();assert.equal(r.output(),undefined);
+ const task=r.s.session.tasks[0];(r.a as any).queue.push({text:'待交付失败提示',lane:'任务失败',kind:'failure',key:task.id});assert.equal(r.a.cancelTasks(task.id),1);assert.equal(task.status,'cancelled');assert.equal((r.a as any).queue.length,0);
+});

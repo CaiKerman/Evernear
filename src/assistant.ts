@@ -11,6 +11,7 @@ import { createVoice, type VoiceSession } from './voice/index.js';
 import { voiceProvider, resolveVoiceConfig } from './voice-config.js';
 import { TextWork } from './text-work.js';
 import type { AppEvent, ContextPacket, Decision, Mode, Task, VoiceDone, Turn } from './types.js';
+const isTaskDelivery = (kind: string) => kind === 'result' || kind === 'failure';
 export class Assistant extends EventEmitter {
     running = false;
     mode: Mode = 'ambient';
@@ -42,7 +43,7 @@ export class Assistant extends EventEmitter {
     private quickCache?: { text: string; chunks: { audio: string; sampleRate: number }[] };
     private ephemeral = new Map<string, Turn>();
     private lifecycle = 0;
-    private transfer?: { startedAt: number; id: number; lane: 'low' | 'high'; voice: VoiceSession; ready: boolean; needed: boolean; query: string; summary: string; tone: string; afterTurn: number; timer: ReturnType<typeof setTimeout> };
+    private transfer?: { startedAt: number; id: number; lane: 'low' | 'high'; voice: VoiceSession; ready: boolean; needed: boolean; task?: Task; continueVoice: boolean; query: string; summary: string; tone: string; afterTurn: number; timer: ReturnType<typeof setTimeout> };
     private transferVersion = 0;
     private deferredDelivery = false;
     private revisionTimer?: ReturnType<typeof setTimeout>;
@@ -57,7 +58,7 @@ export class Assistant extends EventEmitter {
     private queue: {
         text: string;
         lane: string;
-        kind: 'answer' | 'bridge' | 'result';
+        kind: 'answer' | 'bridge' | 'result' | 'failure';
         key?: string;
         turnId?: string;
         manual?: boolean;
@@ -66,7 +67,7 @@ export class Assistant extends EventEmitter {
     private get pendingTask() { return this.store.session.tasks.find(t => t.status === 'running'); }
     private decisionTimer?: ReturnType<typeof setTimeout>;
     private interaction = 0;
-    private activeOutputKind?: 'answer' | 'bridge' | 'result' | 'native';
+    private activeOutputKind?: 'answer' | 'bridge' | 'result' | 'failure' | 'native';
     private replyPermit = false;
     private replyRequest = 0;
     private replyAudio: {
@@ -196,7 +197,7 @@ export class Assistant extends EventEmitter {
         const transfer = this.transfer; this.transfer = undefined; this.transferVersion++;
         if (transfer) { clearTimeout(transfer.timer); transfer.voice.close(); this.store.append('logs', { kind:'voice-transition', phase:'revoked', version:transfer.id, lane:transfer.lane, elapsedMs:Date.now()-transfer.startedAt, at:new Date().toISOString() }); }
     }
-    private prepareTransfer(lane: 'low' | 'high', d: Partial<Decision>, needed = true) {
+    private prepareTransfer(lane: 'low' | 'high', d: Partial<Decision>, needed = true, task = this.pendingTask) {
         this.cancelTransfer();
         if (!this.running || (lane === 'high' && !this.highAvailable())) return;
         const generation = this.lifecycle, id = ++this.transferVersion, voice = this.makeReceiver(lane);
@@ -204,7 +205,7 @@ export class Assistant extends EventEmitter {
             if (this.transfer?.id !== id) return;
             this.cancelTransfer(); this.error('语音交接准备超过 45 秒，已关闭待命连接；原接收方保持不变，没有重试'); this.state(); this.drain();
         }, 45000);
-        const transfer: NonNullable<Assistant['transfer']> = this.transfer = { startedAt: Date.now(), id, lane, voice, ready: false, needed, query: d.utterance || '', summary: d.summary || '', tone: d.tone || '', afterTurn: this.store.session.turns.length, timer };
+        const transfer: NonNullable<Assistant['transfer']> = this.transfer = { startedAt: Date.now(), id, lane, voice, ready: false, needed, task, continueVoice: d.action !== 'delegate' || advancedAvailability(this.store.config).state !== 'configured', query: d.utterance || '', summary: d.summary || '', tone: d.tone || '', afterTurn: this.store.session.turns.length, timer };
         const failed = (e: unknown) => { if (this.transfer !== transfer) return; this.cancelTransfer(); this.error(e); this.state(); this.drain(); };
         voice.on('fault', failed); voice.on('disconnected', () => failed(new Error('待命语音连接中断，原接收方保持不变')));
         this.state();
@@ -215,17 +216,20 @@ export class Assistant extends EventEmitter {
     }
     private tryTransfer() {
         const t = this.transfer;
-        if (!t || !this.running || this.queue.some(x => x.kind !== 'result') || Date.now() < this.localSpeechUntil || this.audioBusy || this.gate?.active || this.cancelRoute || this.revision || this.quickRecording) return;
+        if (!t || !this.running || this.queue.some(x => !isTaskDelivery(x.kind)) || Date.now() < this.localSpeechUntil || this.audioBusy || this.gate?.active || this.cancelRoute || this.revision || this.quickRecording) return;
         if (!t.needed) { this.cancelTransfer(); this.state(); return; }
         if (!t.ready || !this.gate?.ready) return;
         // Build from the latest approved history at commit time, never from the
         // first-turn microphone. Partial delivery is explicitly separate.
-        const task = this.store.session.tasks.filter(x => x.status === 'running' || x.status === 'done').slice(-1)[0];
+        // Keep the topic's task object (ID/revision and terminal state), even if
+        // its UI record was cleared. An empty running slot is not permission
+        // to restart cancelled, failed or completed reasoning.
+        const task = t.task;
         const answers = this.store.session.turns.slice(Math.max(0, t.afterTurn - 1)).filter(x => x.role === 'assistant').slice(-3).map(x => ({ text: x.text.slice(0, 1200), delivery: x.delivery || 'unheard', note: x.delivery === 'partial' ? '部分播放，具体边界未知' : undefined }));
         let packet: ContextPacket | undefined;
         try { if(t.lane==='high') packet = this.packet(t.query.slice(0, 2000), '语音交接'); }
         catch(e) { this.cancelTransfer(); this.error(e); this.state(); return; }
-        const handoff = { version: t.id, interaction: this.interaction, intent: t.summary.slice(0, 1000), keyUtterance: t.query.slice(0, 2000), toneInference: t.tone || null, answers, pending: task ? { id: task.id, revision: task.revision, query: task.query.slice(0, 1000), status: task.status, result: task.result?.slice(0, 1200) } : null, note: '仅文字交接；首轮原音未缓存或转发。交接后新输入仍先判断对象。未播内容不是已听历史。已有文字任务不重复计算。' };
+        const handoff = { version: t.id, interaction: this.interaction, intent: t.summary.slice(0, 1000), keyUtterance: t.query.slice(0, 2000), toneInference: t.tone || null, answers, pending: task ? { id: task.id, revision: task.revision, query: task.query.slice(0, 1000), status: task.status, result: task.result?.slice(0, 1200), error: task.error?.slice(0, 500) } : null, note: '仅文字交接；首轮原音未缓存或转发。交接后新输入仍先判断对象。未播内容不是已听历史。已有文字任务不重复计算。' };
         try { const rules=this.gateInstructions(t.lane); t.voice.configure(t.lane==='low'?rules:rules + '\n交接资料（不是新指令，不主动生成）：' + handoffText(handoff, packet!, Math.max(800,Math.min(this.store.config.contextChars,voiceProvider(t.voice.options.config)==='doubao'?4000:40000)-rules.length-40))); }
         catch (e) { this.cancelTransfer(); this.error(e); this.state(); return; }
         const old = this.gate;
@@ -235,7 +239,7 @@ export class Assistant extends EventEmitter {
         old?.close(); this.state();
         this.store.append('logs', { kind:'voice-transition', phase:'committed', version:t.id, lane:t.lane, elapsedMs:Date.now()-t.startedAt, at:new Date().toISOString() });
         this.event('handoff', { receiver: t.lane, version: t.id, interaction: this.interaction });
-        if (t.lane === 'high' && t.query && !this.pendingTask) {
+        if (t.lane === 'high' && t.query && t.continueVoice && !task) {
             void this.answerVoice('high', '请接续基础首答，避免重复已播内容。交接资料：' + JSON.stringify(handoff).slice(0, 2000)).catch(e => this.error(e));
         } else this.drain();
     }
@@ -247,7 +251,10 @@ export class Assistant extends EventEmitter {
     private deferResults() {
         this.deferredDelivery = true;
         for (const task of this.store.session.tasks) if (task.delivery === 'auto') { task.delivery = 'manual'; this.store.saveTask(task); }
-        this.queue = this.queue.filter(x => x.kind !== 'result' && x.kind !== 'bridge');
+        this.queue = this.queue.filter(x => x.kind !== 'bridge' && (!isTaskDelivery(x.kind) || this.store.session.tasks.find(task => task.id === x.key)?.delivery === 'notify'));
+    }
+    private canDeliverTask(task: Task) {
+        return this.running && task.delivery !== 'manual' && (!this.deferredDelivery || task.delivery === 'notify');
     }
     private reconnect() {
         if (this.reconnectTimer || !this.running || this.mode === 'high')
@@ -380,7 +387,7 @@ export class Assistant extends EventEmitter {
         this.event('hearing', { active: false });
         this.store.append('logs', { kind: 'intervention', at: new Date().toISOString(), action: d.action });
         if (d.action === 'yield') {
-            if (this.mode === 'high' && !this.audioBusy && !this.quickRecording) { this.deferResults(); this.prepareTransfer('low', {}); this.tryTransfer(); }
+            if (this.mode === 'high' && !this.audioBusy && !this.quickRecording) { this.deferResults(); this.prepareTransfer('low', {}); this.tryTransfer(); this.drain(); }
             return;
         }
         if (d.action === 'ignore') {
@@ -435,13 +442,17 @@ export class Assistant extends EventEmitter {
         if (d.action === 'ignore' || d.action === 'ack') return;
         const high = this.mode === 'high';
         const first = !high && ['answer','switch_high','delegate','recall'].includes(d.action);
-        if (first) { const prior=this.transfer; this.prepareTransfer('high', { ...d, summary: [prior?.summary,d.summary].filter(Boolean).join('；').slice(0,1000) }, !!prior?.needed || d.continueHigh === true || d.action === 'switch_high' || d.action === 'delegate'); }
+        if (first) { const prior=this.transfer; this.prepareTransfer('high', { ...d, summary: [prior?.summary,d.summary].filter(Boolean).join('；').slice(0,1000) }, !!prior?.needed || d.continueHigh === true || d.action === 'switch_high' || d.action === 'delegate', prior?.task || this.pendingTask); }
         switch (d.action) {
             case 'answer': case 'switch_high': case 'recall':
                 if (d.firstAnswer && !high) this.enqueue(d.firstAnswer, '基础首答');
                 else await this.answerVoice(high ? 'high' : 'low', d.utterance);
                 break;
             case 'delegate':
+                if (high && advancedAvailability(this.store.config).state !== 'configured') {
+                    await this.answerVoice('high', d.query || d.utterance);
+                    break;
+                }
                 this.delegate(d);
                 if (high) { if (d.firstAnswer) this.enqueue(d.firstAnswer, '对话衔接', 'bridge'); }
                 else if (d.firstAnswer) this.enqueue(d.firstAnswer, '基础首答', 'bridge');
@@ -450,7 +461,7 @@ export class Assistant extends EventEmitter {
             case 'ambient':
                 this.deferResults(); this.cancelTransfer();
                 if (high) this.prepareTransfer('low', d);
-                this.state(); this.tryTransfer();
+                this.state(); this.tryTransfer(); this.drain();
                 break;
             case 'stop_speaking': this.interrupt(true, true); this.cancelTransfer(); this.state(); break;
             case 'cancel': {
@@ -490,6 +501,7 @@ export class Assistant extends EventEmitter {
         const normalized = (q: string) => q.replace(/\s+/g, '').toLowerCase();
         const duplicate = this.store.session.tasks.find(t => normalized(t.query) === normalized(query) && t.status === 'running');
         if (duplicate) {
+            if (this.transfer) { this.transfer.task = duplicate; this.transfer.continueVoice = false; }
             this.event('notice', { message: '同一问题已经在处理或刚处理过，已拦截重复委托；如需重试请明确提出。' });
             return false;
         }
@@ -503,16 +515,17 @@ export class Assistant extends EventEmitter {
         const abort = new AbortController();
         const release = this.textWork.claim('语音委托', abort);
         this.taskController = { id: task.id, abort };
+        if (this.transfer) { this.transfer.task = task; this.transfer.continueVoice = false; }
         this.store.saveTask(task);
         this.state();
         const timer = setTimeout(() => abort.abort(new Error('任务超时')), this.store.config.taskTimeoutSeconds * 1000);
         const model = new TextModel(this.store.config, r => this.usage(r), { requests: this.requests, source: 'advanced-task', taskId: task.id });
         void model.complete([{ role: 'system', content: `你是个人语音助手的文字推理模型。先给简短口头结论，以单独一行【完整依据】分隔，再给完整依据；该标记之前的结论应保留关键数字，不超过400字。根据历史理解追问和纠正。没有搜索工具，不得声称已联网核实。费用依据实际统计及用户数字；信息不足应追问。\n${packet.instructions}` }, { role: 'user', content: packet.text }], abort.signal)
             .then(result => { if (abort.signal.aborted || task.status !== 'running')
-            return; task.status = 'done'; task.result = result; this.advancedResult = { state: 'succeeded', message: `高级文字：${this.store.config.advanced.model} 最近一次任务调用成功。` }; task.finishedAt = new Date().toISOString(); this.store.saveTask(task); this.event('taskResult', { task }); this.endWaiting(task.id); if (this.running && task.delivery !== 'manual' && (!this.deferredDelivery || task.delivery === 'notify')) this.enqueue(result, '高级文字结果', 'result', task.id); })
+            return; task.status = 'done'; task.result = result; this.advancedResult = { state: 'succeeded', message: `高级文字：${this.store.config.advanced.model} 最近一次任务调用成功。` }; task.finishedAt = new Date().toISOString(); this.store.saveTask(task); this.event('taskResult', { task }); this.endWaiting(task.id); if (this.canDeliverTask(task)) this.enqueue(result, '高级文字结果', 'result', task.id); })
             .catch(e => { this.endWaiting(task.id); if (task.status === 'cancelled')
-            return; task.status = abort.signal.aborted && String(abort.signal.reason).includes('取消') ? 'cancelled' : 'failed'; task.error = safeError(e, [this.store.config.advanced.key, this.store.config.low.key, this.store.config.high.key]); this.advancedResult = { state: 'failed', message: '高级文字：最近一次任务失败，' + task.error.slice(0, 220) }; task.finishedAt = new Date().toISOString(); this.store.saveTask(task); this.error(task.error); if (this.running && task.status === 'failed')
-            this.enqueue('这个问题暂时没能处理成功，错误详情已保留在任务里。', '任务失败'); })
+            return; task.status = abort.signal.aborted && String(abort.signal.reason).includes('取消') ? 'cancelled' : 'failed'; task.error = safeError(e, [this.store.config.advanced.key, this.store.config.low.key, this.store.config.high.key]); this.advancedResult = { state: 'failed', message: '高级文字：最近一次任务失败，' + task.error.slice(0, 220) }; task.finishedAt = new Date().toISOString(); this.store.saveTask(task); this.error(task.error); if (task.status === 'failed' && this.canDeliverTask(task))
+            this.enqueue('这个问题暂时没能处理成功，错误详情已保留在任务里。', '任务失败', 'failure', task.id); })
             .finally(() => { release(); clearTimeout(timer); if (this.taskController?.id === task.id) this.taskController = undefined; this.state(); if (this.running && this.gate?.ready && !this.gate.active) {
             try {
                 this.gate.configure(this.gateInstructions());
@@ -524,7 +537,7 @@ export class Assistant extends EventEmitter {
         return task.id;
     }
     cancelTasks(id?: string) { clearTimeout(this.revisionTimer); this.revision = undefined; let n = 0; for (const t of this.store.session.tasks) {
-        if ((id && t.id !== id) || !['running','done'].includes(t.status) || t.status === 'done' && t.delivered)
+        if ((id && t.id !== id) || !['running','done','failed'].includes(t.status) || t.status !== 'running' && t.delivered)
             continue;
         this.endWaiting(t.id);
         this.queue = this.queue.filter(x => x.key !== t.id);
@@ -672,7 +685,7 @@ export class Assistant extends EventEmitter {
                 return; this.interrupt(false, true); this.finishPlayback(playbackId, 'unheard', 0, 0); }, 120000);
         }
     }
-    async backAmbient() { if (!this.running) return; this.deferResults(); this.cancelTransfer(); if (this.mode === 'high') this.prepareTransfer('low', {}); this.tryTransfer(); this.state(); }
+    async backAmbient() { if (!this.running) return; this.deferResults(); this.cancelTransfer(); if (this.mode === 'high') this.prepareTransfer('low', {}); this.tryTransfer(); this.state(); this.drain(); }
     private waitFor(key: string, text: string) { this.endWaiting(key); this.enqueue(text, '对话衔接', 'bridge', key); }
     private endWaiting(key: string) { this.queue = this.queue.filter(x => x.kind !== 'bridge' || x.key !== key); }
     interrupt(cancelReply = true, preserveResults = false) {
@@ -687,7 +700,7 @@ export class Assistant extends EventEmitter {
         this.speaker?.cancel();
         this.speaker?.close();
         this.speaker = undefined;
-        this.queue = preserveResults ? this.queue.filter(x => x.kind === 'result') : [];
+        this.queue = preserveResults ? this.queue.filter(x => isTaskDelivery(x.kind)) : [];
         if (this.playbackTimer)
             clearTimeout(this.playbackTimer);
         this.playbackTimer = undefined;
@@ -720,7 +733,7 @@ export class Assistant extends EventEmitter {
         this.activeOutputKind = undefined;
         this.event('interrupt');
     }
-    private enqueue(text: string, lane: string, kind: 'answer' | 'bridge' | 'result' = 'answer', key?: string, turnId?: string, manual = false) { if (!text.trim())
+    private enqueue(text: string, lane: string, kind: 'answer' | 'bridge' | 'result' | 'failure' = 'answer', key?: string, turnId?: string, manual = false) { if (!text.trim())
         return; if (this.queue.length >= 8) {
         const index = this.queue.findIndex(x => x.kind === 'bridge');
         this.queue.splice(index < 0 ? this.queue.length - 1 : index, 1);
@@ -729,14 +742,19 @@ export class Assistant extends EventEmitter {
     else
         this.queue.unshift(item); this.drain(); }
     private drain() {
-        if (!this.queue.some(x => x.kind !== 'result')) this.tryTransfer();
+        if (!this.queue.some(x => !isTaskDelivery(x.kind))) this.tryTransfer();
         if (!this.running && !this.queue.some(x => x.manual))
             return;
         this.flushReplyAudio();
         if (this.quickRecording || this.speaking || this.userSpeaking || this.decisionTimer || this.cancelRoute || this.reply || !this.queue.length)
             return;
         const item = this.queue.shift()!;
-        if (item.kind === 'result' && !item.manual) { const task = this.store.session.tasks.find(x => x.id === item.key); if (!task || task.status !== 'done' || task.delivery === 'manual' || this.deferredDelivery && task.delivery !== 'notify') { this.drain(); return; } item.text = item.text.split(/(?:^|\n)【完整依据】\s*(?:\n|$)/)[0]; }
+        if (isTaskDelivery(item.kind) && !item.manual) {
+            const task = this.store.session.tasks.find(x => x.id === item.key);
+            const status = item.kind === 'failure' ? 'failed' : 'done';
+            if (!task || task.status !== status || !this.canDeliverTask(task)) { this.drain(); return; }
+            if (item.kind === 'result') item.text = item.text.split(/(?:^|\n)【完整依据】\s*(?:\n|$)/)[0];
+        }
         this.speaking = true;
         this.activeOutputKind = item.kind;
         const epoch = this.outputEpoch;
@@ -751,7 +769,7 @@ export class Assistant extends EventEmitter {
         delete t.deliveryReason;
         delete t.heardMs;
         delete t.durationMs;
-        if (item.key && item.kind === 'result')
+        if (item.key && isTaskDelivery(item.kind))
             t.taskId = item.key;
         this.store.saveSession();
         this.activeSpeechTurn = t.id;
