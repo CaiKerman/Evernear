@@ -4,12 +4,14 @@ import { randomUUID, createHash } from 'node:crypto';
 import type { Config, Session, Turn, Task, MemoryEntry } from './types.js';
 import { normalizeChatURL } from './endpoints.js';
 import { normalizeVoiceURL, voiceProvider } from './voice-config.js';
+import { quickDefaults, validateQuickSettings } from './quick-settings.js';
 
 export const defaults: Config = {
   version:1,
   low:{provider:'qwen',appId:'',appKey:'',resourceId:'',url:'wss://maas.qianwenaiapi.com/api-ws/v1/realtime',key:'',model:'qwen3.8-omni-flash-realtime',voice:'Tina'},
   high:{provider:'inherit',appId:'',appKey:'',resourceId:'',url:'',key:'',model:'',voice:''},
   advanced:{enabled:false,url:'https://maas.qianwenaiapi.com/compatible-mode/v1',key:'',model:'qwen-plus',stream:true,requestsPerMinute:8},
+  quickInput:quickDefaults,
   proxy:'',microphone:'',outputDevice:'',sensitivity:'conservative',
   vad:{type:'semantic_vad',threshold:0.5,silenceMs:800},
   contextChars:12000,recentTurns:10,rotateMinutes:30,taskTimeoutSeconds:120,
@@ -30,6 +32,7 @@ export function validateConfig(input: unknown): Config {
   // Legacy zero fields meant no price configured. Preserve all positive rates.
   if(x.pricingVersion!==2&&x.prices)for(const key of Object.keys(c.prices) as (keyof Config['prices'])[])if(c.prices[key]===0)c.prices[key]=null;
   c.pricingVersion=2;
+  c.quickInput=validateQuickSettings(x.quickInput);
   for(const v of [c.low,c.high]) for(const k of ['url','key','model','voice'] as const) if(typeof v[k]!=='string') throw new Error(`语音配置 ${k} 应为文本`);
   for(const [lane,v] of [['low',c.low],['high',c.high]] as const){
     if(!['qwen','openai','gemini','doubao',...(lane==='high'?['inherit']:[])].includes(v.provider||''))throw new Error('不支持的语音厂商协议');

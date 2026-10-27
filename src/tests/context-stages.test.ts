@@ -15,3 +15,10 @@ test('long history produces a bounded digest plus recent exact turns with no sum
   const s=store(t);for(let i=0;i<135;i++)s.addTurn('user',`条件${i} `+'资料'.repeat(40),'test');assert.ok(s.session.summary);const p=buildContext({...s.config,contextChars:4000},'规则',[],s.session,'新问题','test');assert.ok(p.chars<=4000);assert.match(p.summary,/较早对话摘录/);assert.equal(p.turns.at(-1)?.text,s.session.turns.at(-1)?.text);assert.ok(p.turns.length<=s.config.recentTurns);assert.ok(p.summary.length<2800);
   s.session.summary='旧摘要';s.session.summaryThrough=s.session.turns[100].id;const q=buildContext(s.config,'规则',[],s.session,'新问题','test');assert.ok(q.turns.every(t=>Date.parse(t.at)>=Date.parse(s.session.turns[100].at)));assert.doesNotMatch(q.text,/"text":"条件0 /);
 });
+
+test('handoff trims optional context as whole JSON while preserving turn identity and partial delivery', async () => {
+    const { handoffText } = await import('../context.js');
+    const info={version:9,interaction:4,answers:[{text:'generated answer',delivery:'partial',note:'部分播放，具体边界未知'}]};
+    const packet={text:JSON.stringify({recent:Array.from({length:20},()=>({role:'user',text:'x'.repeat(500)})),memory:['y'.repeat(1000)],summary:'z'.repeat(1000)}),instructions:'behavior'} as any;
+    const raw=handoffText(info,packet,1000);assert.ok(raw.length<=1000);const value=JSON.parse(raw);assert.equal(value.version,9);assert.equal(value.answers[0].delivery,'partial');assert.equal(value.context.instructions,'behavior');
+});

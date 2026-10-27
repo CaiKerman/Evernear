@@ -8,7 +8,8 @@ const $=<T extends HTMLElement=HTMLElement>(id:string)=>document.getElementById(
 const bridge=window.ambient;
 let snapshot:Snapshot,config:Config,running=false,starting=false,startGeneration=0,toastTimer:ReturnType<typeof setTimeout>;
 let captureContext:AudioContext|undefined,stream:MediaStream|undefined,captureNode:AudioWorkletNode|undefined;
-let levelLast=0;
+let levelLast=0, manualCapture=false;
+let captureStarting: Promise<void>|undefined;
 const messageElements=new Map<string,HTMLElement>();
 const displayedTurns=new Map<string,Turn>();
 
@@ -22,36 +23,41 @@ const player=new PcmPlayer(()=>config?.outputDevice||'',p=>bridge.playback(p),e=
 const ensurePlayback=()=>player.prepare();
 const stopPlayback=()=>player.interrupt();
 function wakeAudio(){
-  if(!running)return;
   player.wake();
+  if(!running&&!manualCapture)return;
   if(captureContext&&captureContext.state!=='running'&&captureContext.state!=='closed')void captureContext.resume().catch(e=>toast('麦克风恢复失败：'+String(e),true));
 }
 document.addEventListener('visibilitychange',wakeAudio);
 window.addEventListener('focus',wakeAudio);
 
 async function startCapture(){
+  if (captureStarting) return captureStarting;
+  if (stream) return;
+  captureStarting=connectCapture().finally(()=>captureStarting=undefined); return captureStarting;
+}
+async function connectCapture(){
   stream=await navigator.mediaDevices.getUserMedia({video:false,audio:{...(config.microphone?{deviceId:{exact:config.microphone}}:{}),channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
   captureContext=new AudioContext();await captureContext.audioWorklet.addModule(new URL('./ui/capture-worklet.js',import.meta.url));
   const source=captureContext.createMediaStreamSource(stream);captureNode=new AudioWorkletNode(captureContext,'ambient-capture');
   const mute=captureContext.createGain();mute.gain.value=0;source.connect(captureNode).connect(mute).connect(captureContext.destination);
-  captureNode.port.onmessage=e=>{if(e.data.type==='pcm'&&running){const bytes=new Uint8Array(e.data.buffer);let b='';for(const x of bytes)b+=String.fromCharCode(x);bridge.audio(btoa(b));}
+  captureNode.port.onmessage=e=>{if(e.data.type==='pcm'&&(running||manualCapture)){const bytes=new Uint8Array(e.data.buffer);let b='';for(const x of bytes)b+=String.fromCharCode(x);bridge.audio(btoa(b));}
     if(e.data.type==='level'&&performance.now()-levelLast>100){levelLast=performance.now();const scale=Math.min(1.6,.65+e.data.value*12);document.querySelector<HTMLElement>('.wave')!.style.transform=`scaleY(${scale})`;}};
-  captureContext.onstatechange=()=>{if(running&&captureContext?.state==='suspended')wakeAudio();};
+  captureContext.onstatechange=()=>{if((running||manualCapture)&&captureContext?.state==='suspended')wakeAudio();};
   await captureContext.resume();
 }
-async function stopCapture(){stream?.getTracks().forEach(t=>t.stop());stream=undefined;captureNode?.disconnect();captureNode=undefined;const old=captureContext;captureContext=undefined;if(old&&old.state!=='closed')await old.close().catch(()=>{});}
+async function stopCapture(){if(captureStarting)await captureStarting.catch(()=>{});stream?.getTracks().forEach(t=>t.stop());stream=undefined;captureNode?.disconnect();captureNode=undefined;const old=captureContext;captureContext=undefined;if(old&&old.state!=='closed')await old.close().catch(()=>{});}
 function renderListenControls(){
   for(const id of ['start','pause-header']){
     const button=$<HTMLButtonElement>(id);button.disabled=starting;
-    button.textContent=starting?'连接中…':running?(id==='start'?'■ 暂停倾听':'■ 暂停'):(id==='start'?'▶ 开始倾听':'▶ 开始');
-    button.setAttribute('aria-pressed',String(running));button.title=starting?'正在连接语音服务':running?'暂停倾听并停止上传音频':'开始倾听';
+    button.textContent=starting?'连接中…':running?(id==='start'?'■ 暂停全部听说':'■ 暂停全部'):(id==='start'?'▶ 开始倾听':'▶ 开始');
+    button.setAttribute('aria-pressed',String(running));button.title=starting?'正在连接语音服务':running?'停止全部听说并取消语音分析任务':'开始倾听';
   }
 }
 async function start(){if(starting)return;if(running){await pause();return;}starting=true;renderListenControls();const generation=++startGeneration;
-  try{await ensurePlayback();await startCapture();if(generation!==startGeneration){await stopCapture();return;}await call('start');if(generation!==startGeneration){await stopCapture();return;}running=true;updateState({type:'state',running:true,mode:'ambient',label:'正在倾听 · 音频上传中'});toast('已开始收音与上传。Ctrl + Shift + Space 可随时暂停。');}
+  try{await ensurePlayback();await startCapture();if(generation!==startGeneration){await stopCapture();return;}await call('start');if(generation!==startGeneration){await stopCapture();return;}running=true;updateState({type:'state',running:true,mode:'ambient',label:'基础值守 · 麦克风上传至基础语音'});toast('已开始收音与上传。Ctrl + Shift + Space 可随时暂停。');}
   catch(e){await stopCapture();fire('stop');toast(String(e),true);}finally{starting=false;renderListenControls();}}
 async function pause(){startGeneration++;await call('stop');running=false;stopPlayback();await stopCapture();}
-function updateState(e:AppEvent){if(!e.running&&starting)startGeneration++;running=e.running;renderListenControls();document.body.classList.toggle('listening',running);$('status-dot').classList.toggle('online',running);$('status-label').textContent=running?e.label||'正在倾听 · 音频上传中':'已暂停 · 尚未采集或上传音频';$('mode-badge').textContent=e.mode==='high'?'高级语音优先':'轻量语音优先';$('back-ambient').classList.toggle('hidden',e.mode!=='high');$('switch-high').classList.toggle('hidden',e.mode==='high');$('art-label').textContent=running?'LISTENING WITH YOU':'READY TO LISTEN';if(e.tasks)renderTasks(e.tasks);if(!running&&!starting)void stopCapture();}
+function updateState(e:AppEvent){if(!e.running&&starting)startGeneration++;running=e.running;renderListenControls();document.body.classList.toggle('listening',running);$('status-dot').classList.toggle('online',running);$('status-label').textContent=e.manualRecording?e.label:running?e.label||'正在倾听 · 音频上传中':'已暂停 · 尚未采集或上传音频';$('mode-badge').textContent=e.mode==='high'?'高级语音接收':'基础语音接收';$('back-ambient').classList.toggle('hidden',e.mode!=='high');$('switch-high').classList.toggle('hidden',e.mode==='high');$('art-label').textContent=running?'LISTENING WITH YOU':'READY TO LISTEN';if(e.tasks)renderTasks(e.tasks);if(!running&&!starting&&!manualCapture)void stopCapture();}
 function addTurn(t:Turn){displayedTurns.set(t.id,t);$('welcome')?.remove();let el=messageElements.get(t.id);if(!el){el=document.createElement('div');el.className='message '+t.role;el.dataset.id=t.id;const meta=document.createElement('div');meta.className='message-meta';const name=document.createElement('span');name.textContent=t.role==='user'?'你':'伴语';const lane=document.createElement('span');lane.textContent=t.lane;const delivery=document.createElement('span');delivery.className='delivery';meta.append(name,lane,delivery);const body=document.createElement('div');body.className='message-body';el.append(meta,body);if(t.role==='assistant'){const button=document.createElement('button');button.className='link replay-turn';button.onclick=()=>{void ensurePlayback().then(()=>call('speech:replay',t.id)).catch(()=>{});};el.append(button);}$('chat').append(el);messageElements.set(t.id,el);}
   el.querySelector('.message-body')!.textContent=t.text||(t.delivery==='unheard'?'本次语音未生成。':'正在说话…');const d=el.querySelector<HTMLElement>('.delivery')!;d.textContent=t.delivery?({generated:'待播报',heard:'已播报',partial:'部分播报',unheard:'未播报'}[t.delivery]):'';d.title=t.deliveryReason||'';const button=el.querySelector<HTMLButtonElement>('.replay-turn');if(button){button.textContent=t.delivery==='generated'?'等待播报':'重新播报';button.disabled=t.delivery==='generated'||!t.text;button.title=t.deliveryReason||'朗读已生成的文字；会调用语音接口，不会重新请求文字推理';}let reason=el.querySelector<HTMLElement>('.delivery-reason');if(!reason){reason=document.createElement('small');reason.className='delivery-reason';el.append(reason);}reason.textContent=t.deliveryReason&&t.delivery!=='generated'?t.deliveryReason:'';$('chat').scrollTop=$('chat').scrollHeight;
 }
@@ -61,10 +67,10 @@ function renderTasks(tasks:Task[]){const root=$('tasks');$<HTMLButtonElement>('c
 function renderContext(p:ContextPacket){$('context-purpose').textContent=p.purpose;$('context-size').textContent=`${p.chars.toLocaleString()} / ${p.limit.toLocaleString()}`;$('context-memories').textContent=String(p.memory.length);$('context-json').textContent=JSON.stringify({instructions:p.instructions,...JSON.parse(p.text)},null,2);}
 function nested(obj:any,key:string){return key.split('.').reduce((o,k)=>o?.[k],obj);}
 function assign(obj:any,key:string,value:any){const keys=key.split('.');let o=obj;for(const k of keys.slice(0,-1))o=o[k];o[keys.at(-1)!]=value;}
-function readSettings():Config{const next=structuredClone(config);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const val=n instanceof HTMLInputElement&&n.type==='checkbox'?n.checked:n instanceof HTMLInputElement&&n.type==='number'?(n.value===''&&/^(prices|highPrices|advancedPrices)\./.test(n.name)?null:Number(n.value)):n.value.trim();assign(next,n.name,val);}next.sensitivity=$<HTMLSelectElement>('sensitivity').value as Config['sensitivity'];return next;}
+function readSettings(includeQuickParameters=true):Config{const next=structuredClone(config);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const val=n instanceof HTMLInputElement&&n.type==='checkbox'?n.checked:n instanceof HTMLInputElement&&n.type==='number'?(n.value===''&&/^(prices|highPrices|advancedPrices)\./.test(n.name)?null:Number(n.value)):n.value.trim();assign(next,n.name,val);}next.sensitivity=$<HTMLSelectElement>('sensitivity').value as Config['sensitivity'];try{if(includeQuickParameters)next.quickInput.parameters=JSON.parse($<HTMLTextAreaElement>('quick-parameters').value);}catch{throw new Error('快捷栏预设参数不是有效的 JSON');}return next;}
 const field=(name:string)=>document.querySelector<HTMLInputElement|HTMLSelectElement>(`[name="${name}"]`)!;
 function endpointPreview(){
-  if(!config)return;const draft=readSettings();
+  if(!config)return;const draft=readSettings(false);
   for(const [lane,id] of [['low','voice-preview'],['high','high-voice-preview']] as const){
     try{const resolved=resolveVoiceConfig(draft,lane);$(id).textContent='实际实时地址：'+normalizeVoiceURL(voiceProvider(resolved),resolved.url);}
     catch(e){$(id).textContent=String(e).replace(/^Error: /,'');}
@@ -125,7 +131,7 @@ function renderRequests(r:any){const at=new Date(r.at).toLocaleTimeString();$('r
 function showAdvancedStatus(status:{state:string;message:string}){const el=$('advanced-status');el.textContent=status.message;el.classList.toggle('warning',['disabled','incomplete','failed'].includes(status.state));}
 function advancedPreview(){
   if(!config)return;
-  const draft=readSettings(),saved=advancedAvailability(config),status=advancedAvailability(draft);
+  const draft=readSettings(false),saved=advancedAvailability(config),status=advancedAvailability(draft);
   const dirty=JSON.stringify(draft.advanced)!==JSON.stringify(config.advanced)||draft.proxy!==config.proxy;
   const el=$('advanced-config-status');el.textContent=(dirty?'未保存的编辑：'+status.message.replace('已保存启用','填写完整，保存后启用')+'\n当前生效：'+saved.message:saved.message);
   el.classList.toggle('warning',dirty||status.state!=='configured');
@@ -142,12 +148,15 @@ async function testConnection(lane:'voice'|'high-voice'|'text'){
       config=await call('config:save',candidate);fillSettings();showAdvancedStatus(advancedAvailability(config));
       toast('文字接口测试成功，已启用并保存。可以开始倾听，或继续刚才的问题。');
     }else toast(result.message);
-  }catch{}finally{b.disabled=false;b.textContent=old;}
+  }catch(e){toast(String(e),true);}finally{b.disabled=false;b.textContent=old;}
 }
-function fillSettings(){for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const v=nested(config,n.name);if(n instanceof HTMLInputElement&&n.type==='checkbox')n.checked=Boolean(v);else n.value=String(v??'');}$<HTMLSelectElement>('sensitivity').value=config.sensitivity;inferPreset();providerUI();advancedPreview();}
+function fillSettings(){$<HTMLTextAreaElement>('quick-parameters').value=JSON.stringify(config.quickInput.parameters,null,2);for(const n of document.querySelectorAll<HTMLInputElement|HTMLSelectElement>('#settings-form [name]')){const v=nested(config,n.name);if(n instanceof HTMLInputElement&&n.type==='checkbox')n.checked=Boolean(v);else n.value=String(v??'');}$<HTMLSelectElement>('sensitivity').value=config.sensitivity;inferPreset();providerUI();advancedPreview();}
 async function devices(ask=false){try{if(ask){const s=await navigator.mediaDevices.getUserMedia({audio:true,video:false});s.getTracks().forEach(t=>t.stop());}const ds=await navigator.mediaDevices.enumerateDevices();for(const [id,kind,key] of [['microphone','audioinput','microphone'],['output-device','audiooutput','outputDevice']] as const){const sel=$<HTMLSelectElement>(id);sel.replaceChildren(new Option('系统默认',''));for(const d of ds.filter(d=>d.kind===kind))sel.add(new Option(d.label||`设备 ${d.deviceId.slice(0,6)}`,d.deviceId));if(config[key]&&!Array.from(sel.options).some(o=>o.value===config[key]))sel.add(new Option('已保存的设备（当前未检测到）',config[key]));sel.value=config[key];}}catch(e){if(ask)toast('无法获取音频设备：'+String(e),true);}}
 
 bridge.subscribe(e=>{
+  if(e.type==='capture'){manualCapture=!!e.active;if(manualCapture)void startCapture().catch(error=>{manualCapture=false;fire('capture:failed');void stopCapture();toast('主动录音失败：'+String(error),true);});else if(!running)void stopCapture();}
+  if(e.type==='settingsOpen'){void call('snapshot').then((s:Snapshot)=>{config=s.config;fillSettings();page('settings');}).catch(()=>{});}
+  if(e.type==='quickSettings'&&config){config.quickInput=e.settings;const checkbox=document.querySelector<HTMLInputElement>('[name="quickInput.visible"]');if(checkbox)checkbox.checked=e.settings.visible;}
   if(e.type==='requests')renderRequests(e.requests);
   if(e.type==='state'){updateState(e);if(e.advancedStatus)showAdvancedStatus(e.advancedStatus);if(e.billing)renderBilling(e.billing);if(e.requests)renderRequests(e.requests);}
   if(e.type==='error')toast(e.message,true);
@@ -169,6 +178,8 @@ bridge.subscribe(e=>{
 $('start').onclick=$('pause-header').onclick=()=>void start().catch(()=>{});
 $('interrupt').onclick=()=>{stopPlayback();fire('interrupt');};$('switch-high').onclick=()=>fire('high');$('back-ambient').onclick=()=>fire('ambient');$('cancel-tasks').onclick=()=>fire('tasks:cancel');
 $('clear-tasks').onclick=()=>{void call('tasks:clear').then((count:number)=>toast(count?`已清空 ${count} 条已结束任务记录；运行中的任务会保留。`:'没有可清空的已结束任务记录。')).catch(()=>{});};
+$('quick-toggle').onclick=()=>fire('quick:toggle');
+$('cancel-text-work').onclick=()=>fire('text:cancel-active');
 $('open-folder').onclick=()=>fire('folder:open');$('quit').onclick=()=>fire('quit');
 $('refresh-context').onclick=()=>void call('context').then(renderContext).catch(()=>{});
 $('refresh-devices').onclick=()=>void devices(true);
@@ -182,7 +193,7 @@ $('save-memory').onclick=()=>void call('text:save','memory.md',$<HTMLTextAreaEle
 $('save-instructions').onclick=()=>void call('text:save','instructions.md',$<HTMLTextAreaElement>('instructions-editor').value).then(()=>toast('行为指令已保存；重新连接或下次刷新会话时生效')).catch(()=>{});
 $('organize').onclick=()=>fire('memory:organize');
 $('add-memory').onclick=()=>{const input=$<HTMLInputElement>('new-memory');if(input.value.trim())void call('memory:add',input.value).then(m=>{$<HTMLTextAreaElement>('memory-editor').value=m;input.value='';toast('已保存到 memory.md');}).catch(()=>{});};
-$<HTMLFormElement>('settings-form').onsubmit=e=>{e.preventDefault();void call('config:save',readSettings()).then(c=>{config=c;fillSettings();const status=advancedAvailability(config);showAdvancedStatus(status);toast('设置已保存。'+status.message,status.state==='incomplete'||status.state==='disabled'&&status.missing.length===0);}).catch(()=>{});};
+$<HTMLFormElement>('settings-form').onsubmit=e=>{e.preventDefault();let candidate:Config;try{candidate=readSettings();}catch(error){toast(String(error),true);return;}void call('config:save',candidate).then(c=>{config=c;fillSettings();const status=advancedAvailability(config);showAdvancedStatus(status);toast('设置已保存。'+status.message,status.state==='incomplete'||status.state==='disabled'&&status.missing.length===0);}).catch(()=>{});};
 $<HTMLSelectElement>('sensitivity').onchange=()=>{if(running){toast('请先暂停，再保存介入积极程度');$<HTMLSelectElement>('sensitivity').value=config.sensitivity;return;}const next={...config,sensitivity:$<HTMLSelectElement>('sensitivity').value};void call('config:save',next).then(c=>config=c).catch(()=>{});};
 $<HTMLFormElement>('composer').onsubmit=e=>{e.preventDefault();const n=$<HTMLInputElement>('message'),text=n.value.trim();if(!text)return;if(!running){toast('请先开始倾听',true);return;}void call('text:send',text).then(()=>{n.value='';}).catch(()=>{});};
 document.addEventListener('keydown',e=>{if(e.ctrlKey&&e.shiftKey&&e.code==='Space'){e.preventDefault();void pause();}});

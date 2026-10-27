@@ -7,6 +7,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { fetch as request, ProxyAgent } from 'undici';
 import type { Config, VoiceConfig, VoiceDone, TextConfig } from './types.js';
 import { advancedAvailability } from './runtime.js';
+import { textParameters } from './text-parameters.js';
 import { normalizeRealtimeURL, normalizeChatURL, assertRealtimeModel } from './endpoints.js';
 export function safeError(error: unknown, secrets: string[] = []) { let s = error instanceof Error ? error.message : String(error); for (const x of secrets)
     if (x)
@@ -14,7 +15,8 @@ export function safeError(error: unknown, secrets: string[] = []) { let s = erro
 export function voiceURL(c: VoiceConfig) { if (!c.key || !c.model || !c.url)
     throw new Error('请先填写实时语音 API Key、模型和地址'); assertRealtimeModel(c.model); const u = new URL(normalizeRealtimeURL(c.url)); u.searchParams.set('model', c.model); return u.toString(); }
 export interface VoiceOptions {
-    role: 'gate' | 'reply' | 'speaker' | 'high';
+    role: 'gate' | 'reply' | 'speaker' | 'high' | 'transcribe';
+    lane?: 'low' | 'high';
     config: VoiceConfig;
     appConfig: Config;
     instructions: string;
@@ -114,7 +116,7 @@ export class Realtime extends EventEmitter {
                     this.texts.set(id, (this.texts.get(id) || '') + (e.delta || ''));
                     this.emit('textDelta', { id, text: e.delta || '' });
                 }
-                if (e.type === 'response.audio.delta' && this.options.role !== 'gate')
+                if (e.type === 'response.audio.delta' && !['gate','transcribe'].includes(this.options.role))
                     this.emit('audio', { id: e.response_id || '', itemId: e.item_id, audio: e.delta });
                 if (e.type === 'response.done') {
                     this.active = false;
@@ -147,9 +149,9 @@ export class Realtime extends EventEmitter {
         this.configured = true;
         this.configuredInstructions = instructions;
         const { role, config, appConfig } = this.options;
-        this.send({ type: 'session.update', session: { modalities: role === 'gate' ? ['text'] : ['text', 'audio'],
+        this.send({ type: 'session.update', session: { modalities: ['gate','transcribe'].includes(role) ? ['text'] : ['text', 'audio'],
                 voice: config.voice, audio: { input: { format: { type: 'pcm', sample_rate: 16000 } }, output: { format: { type: 'pcm', sample_rate: 24000 }, voice: config.voice } },
-                input_audio_transcription: null, instructions,
+                input_audio_transcription: role === 'transcribe' ? { model: 'qwen3-asr-flash-realtime' } : null, instructions,
                 turn_detection: role !== 'gate' ? null : { type: appConfig.vad.type, threshold: appConfig.vad.threshold, silence_duration_ms: appConfig.vad.silenceMs },
                 max_tokens: role === 'gate' ? 1800 : 2500 } });
     }
@@ -164,6 +166,7 @@ export class Realtime extends EventEmitter {
     text(text: string) { if (!this.ready || this.dead)
         throw new Error('语音连接尚未就绪'); if (this.pendingText || this.active)
         throw new Error('上一条语音请求尚未结束'); const id = 'item_' + randomUUID().replaceAll('-', ''); const timer = setTimeout(() => { this.clearText(); this.emit('fault', new Error('服务端未确认文本输入，本轮未发送生成请求')); }, 10000); this.pendingText = { id, text, timer }; this.send({ type: 'conversation.item.create', item: { id, type: 'message', role: 'user', content: [{ type: 'input_text', text }] } }); }
+    finishInput() { if (this.options.role !== 'transcribe' || !this.ready || this.dead) throw new Error('转写尚未就绪'); this.send({ type: 'input_audio_buffer.commit' }); }
     toolResult(callId: string, output: string, respond = false) { this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output } }); if (respond)
         this.respond(); }
     respond() { this.send({ type: 'response.create' }); }
@@ -179,14 +182,14 @@ export class Realtime extends EventEmitter {
             this.socket.close();
     } }
 }
-export async function postJSON(url: string, key: string, body: unknown, proxy: string, signal: AbortSignal, timeoutMs = 120000): Promise<any> {
+export async function postJSON(url: string, key: string, body: unknown, proxy: string, signal: AbortSignal, timeoutMs = 120000, onDelta?: (text: string) => void): Promise<any> {
     const agent = proxy ? new ProxyAgent(proxy) : undefined;
     try {
         const res = await request(url, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]), ...(agent ? { dispatcher: agent } : {}) });
         if (!res.ok)
             throw new ApiFailure(res.status, await readFailureBody(res.body), res.headers, [key]);
         if (res.headers.get('content-type')?.includes('text/event-stream'))
-            return await readChatStream(res.body, signal, { secrets: [key], headers: res.headers });
+            return await readChatStream(res.body, signal, { secrets: [key], headers: res.headers }, onDelta);
         const data: any = await res.json();
         if (data?.error)
             throw new ApiFailure(undefined, data, res.headers, [key]);
@@ -201,14 +204,16 @@ export async function postJSON(url: string, key: string, body: unknown, proxy: s
 export async function readChatStream(body: AsyncIterable<Uint8Array> | null, signal: AbortSignal, diagnostic: {
     secrets?: string[];
     headers?: ErrorHeaders;
-} = {}) {
+} = {}, onDelta?: (text: string) => void) {
     if (!body)
         throw new Error('文字接口未返回响应体');
     const decoder = new TextDecoder();
-    let pending = '', text = '', usage: any, finished = false, done = false;
+    let pending = '', text = '', usage: any, finished = false, done = false, finishReason: string | undefined;
     const calls = new Map<number, any>();
     let bytes = 0;
     const frame = (block: string) => {
+        signal.throwIfAborted();
+        if (done) return;
         const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
         if (!data)
             return;
@@ -230,11 +235,9 @@ export async function readChatStream(body: AsyncIterable<Uint8Array> | null, sig
         const choice = x.choices?.find((c: any) => c.index === 0) || x.choices?.[0];
         if (!choice)
             return;
-        if (choice.finish_reason)
-            finished = true;
+        if (choice.finish_reason) { finished = true; finishReason = choice.finish_reason; }
         const delta = choice.delta || {};
-        if (typeof delta.content === 'string')
-            text += delta.content;
+        if (typeof delta.content === 'string') { text += delta.content; onDelta?.(delta.content); }
         for (const t of delta.tool_calls || []) {
             const index = t.index ?? 0;
             let call = calls.get(index);
@@ -257,11 +260,11 @@ export async function readChatStream(body: AsyncIterable<Uint8Array> | null, sig
         bytes += chunk.length;
         if (bytes > 4 * 1024 * 1024)
             throw new Error('文字响应超过本应用的大小限制');
-        pending = (pending + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
-        let split: number;
-        while ((split = pending.indexOf('\n\n')) >= 0) {
-            frame(pending.slice(0, split));
-            pending = pending.slice(split + 2);
+        pending += decoder.decode(chunk, { stream: true });
+        let separator: RegExpExecArray | null;
+        while ((separator = /\r?\n\r?\n/.exec(pending))) {
+            frame(pending.slice(0, separator.index));
+            pending = pending.slice(separator.index + separator[0].length);
         }
     }
     pending += decoder.decode();
@@ -273,7 +276,7 @@ export async function readChatStream(body: AsyncIterable<Uint8Array> | null, sig
     const tool_calls = [...calls.entries()].sort((a, b) => a[0] - b[0]).map(([, c]) => c);
     if (tool_calls.some(c => !c.id || !c.function.name))
         throw new Error('流式工具调用不完整');
-    return { choices: [{ message: { role: 'assistant', content: text || null, ...(tool_calls.length ? { tool_calls } : {}) } }], ...(usage ? { usage } : {}) };
+    return { choices: [{ finish_reason: finishReason, message: { role: 'assistant', content: text || null, ...(tool_calls.length ? { tool_calls } : {}) } }], ...(usage ? { usage } : {}) };
 }
 export class TextModel {
     private requests: RequestController;
@@ -281,17 +284,21 @@ export class TextModel {
         requests?: RequestController;
         source?: string;
         taskId?: string;
+        manual?: boolean;
     } = {}) { this.requests = scope.requests || new RequestController(() => ({ origin: app.advanced.url, limit: app.advanced.requestsPerMinute ?? 8 })); }
-    async complete(messages: any[], signal: AbortSignal): Promise<string> {
+    async complete(messages: any[], signal: AbortSignal, options: { parameters?: Record<string, unknown>; onDelta?: (text: string) => void } = {}): Promise<string> {
         const c = this.app.advanced;
         const availability = advancedAvailability(this.app);
-        if (availability.state !== 'configured')
-            throw new Error(availability.message);
+        if (this.scope.manual ? availability.missing.length > 0 : availability.state !== 'configured')
+            throw new Error(this.scope.manual ? `请先填写并保存文字接口：缺少${availability.missing.join('、')}` : availability.message);
         signal.throwIfAborted();
         const streaming = c.stream !== false, url = normalizeChatURL(c.url);
-        const r = await this.requests.run({ url, model: c.model, source: this.scope.source || 'advanced-task', channel: 'advanced', taskId: this.scope.taskId, round: 1, limit: c.requestsPerMinute ?? 8 }, signal, () => postJSON(url, c.key, { model: c.model, messages, max_tokens: 1800, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}), ...(/^qwen3\.8-omni-flash$/.test(c.model) ? { modalities: ['text'] } : {}) }, this.app.proxy, signal, this.app.taskTimeoutSeconds * 1000));
+        const parameters = options.parameters ? textParameters(options.parameters) : {};
+        const r = await this.requests.run({ url, model: c.model, source: this.scope.source || 'advanced-task', channel: 'advanced', taskId: this.scope.taskId, round: 1, limit: c.requestsPerMinute ?? 8 }, signal, () => postJSON(url, c.key, { max_tokens: 1800, ...parameters, model: c.model, messages, stream: streaming, ...(streaming ? { stream_options: { include_usage: true } } : {}), ...(/^qwen3\.8-omni-flash$/.test(c.model) ? { modalities: ['text'] } : {}) }, this.app.proxy, signal, this.app.taskTimeoutSeconds * 1000, options.onDelta), !!this.scope.manual);
+        signal.throwIfAborted();
         this.onUsage({ role: 'advanced', model: c.model, usage: r.usage || {} });
         const m = r.choices?.[0]?.message;
+        if (this.scope.manual && r.choices?.[0]?.finish_reason && r.choices[0].finish_reason !== 'stop') throw new Error('文字输出未完整完成：' + r.choices[0].finish_reason);
         if (typeof m?.content !== 'string' || !m.content.trim())
             throw new Error('文字接口未返回有效文字');
         return m.content;

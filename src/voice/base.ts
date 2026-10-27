@@ -7,6 +7,7 @@ import { assertVoiceReady, normalizeVoiceURL, voiceProvider } from '../voice-con
 
 export interface VoiceSession extends EventEmitter {
   options:VoiceOptions;ready:boolean;active:boolean;nativeTools?:boolean;suppressTurn?:()=>void;
+  finishInput?():void;
   connect():Promise<void>;configure(instructions:string):void;append(audio:string):void;text(text:string):void;
   toolResult(callId:string,output:string,respond?:boolean):void;respond():void;cancel():void;close():void;
 }
@@ -74,4 +75,4 @@ export class Pcm16Resampler {
   }
 }
 export const newResponseId=()=>randomUUID();
-export const gateFunction={name:'submit_decision',description:'静默判断是否介入及去向，不回答。',parameters:{type:'object',properties:{action:{type:'string',enum:['ignore','answer','switch_high','delegate','ambient','cancel','remember','recall','capabilities']},utterance:{type:'string'},reason:{type:'string'},memory:{type:'string'},replaceTaskId:{type:'string'}},required:['action']}};
+export const gateFunction={name:'submit_decision',description:'静默判断是否介入及去向，不回答。',parameters:{type:'object',properties:{action:{type:'string',enum:['ignore','answer','switch_high','delegate','ambient','cancel','remember','recall','capabilities','stop_speaking','ack','yield']},utterance:{type:'string'},reason:{type:'string'},memory:{type:'string'},replaceTaskId:{type:'string'},continueHigh:{type:'boolean'},summary:{type:'string'},tone:{type:'string'},firstAnswer:{type:'string'},notifyLater:{type:'boolean'}},required:['action']}};

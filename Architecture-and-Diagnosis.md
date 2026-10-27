@@ -1,3 +1,5 @@
+> 历史记录：以下描述 0.5.1 的现场排查与旧调度。当前行为以 PROJECT.md、VOICE_SCHEDULING_PLAN.md 和 docs/voice-capabilities.md 为准；高级接管后已经直接接收后续原生麦克风。
+
 # 伴语：目标、精简架构与现场排查
 
 ## 软件目标

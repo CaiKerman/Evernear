@@ -1,5 +1,5 @@
 const {contextBridge,ipcRenderer}=require('electron');
-const channels=new Set(['snapshot','config:save','connection:test','text:save','start','stop','text:send','high','ambient','tasks:cancel','tasks:clear','speech:replay','tasks:speak','memory:organize','memory:add','folder:open','interrupt','context','quit']);
+const channels=new Set(['snapshot','config:save','connection:test','text:save','start','stop','text:send','high','ambient','tasks:cancel','tasks:clear','speech:replay','tasks:speak','memory:organize','memory:add','folder:open','interrupt','context','quit','quick:toggle','text:cancel-active','capture:failed']);
 contextBridge.exposeInMainWorld('ambient',{
   invoke:(name,...args)=>{if(!channels.has(name))return Promise.reject(new Error('无效调用'));return ipcRenderer.invoke(name,...args);},
   audio:(audio)=>ipcRenderer.send('audio',audio),
